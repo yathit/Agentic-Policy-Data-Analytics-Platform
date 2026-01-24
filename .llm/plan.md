@@ -2,15 +2,20 @@
 
 ## 0) Goal
 Build a full-stack agentic analytics platform that answers policy research questions end-to-end:
-natural-language query → multi-agent workflow → multi-source government data extraction → validation/cleaning → statistical analysis + visualisations → structured, cited insights → exportable report — with real-time agent event streaming in the UI.
+natural-language query → **human-reviewed agent plan** → multi-agent workflow → multi-source government data extraction → validation/cleaning → statistical analysis + visualisations → **confidence-scored, cited insights** → exportable report — with real-time agent event streaming in the UI.
+
+The system is explicitly designed to align with the IMDA New Model AI Governance Framework for Agentic AI (2026), emphasising bounded autonomy, transparency, human oversight, and fail-safe behaviour.
 
 ## 1) Scope & Success Criteria
 
-### Must-have (maps to assessment requirements)
-- Multi-agent system (3 agents minimum):
-  - **Data Coordinator Agent**: interprets query, plans workflow, delegates tasks, handles retries/ambiguity.
-  - **Data Extraction Agent**: fetches data from multiple sources, normalises formats, validates quality.
-  - **Analytics Agent**: computes statistics, trends, correlations; generates policy-relevant insights and charts.
+### Must-have (assessment requirements)
+- Multi-agent system (3 agents minimum) with **bounded autonomy**:
+  - **Data Coordinator Agent**: interprets query, proposes an execution plan, delegates tasks **after human approval**, handles retries/ambiguity.
+  - **Data Extraction Agent**: fetches data from approved sources only, normalises formats, validates quality (read-only, least-privilege access).
+  - **Analytics Agent**: computes statistics, trends, correlations; generates policy-relevant insights grounded strictly in computed evidence.
+- Human-in-the-loop governance:
+  - Explicit **plan review / approve / abort** step before execution.
+  - Ability to halt runs and inspect partial results.
 - Government data integration:
   - Integrate **at least 2** sources from: DOS SingStat, MOM Statistics, Data.gov.sg, mock internal DB.
   - Support **at least 2 formats** among CSV / Excel / JSON / API responses.
@@ -18,19 +23,19 @@ natural-language query → multi-agent workflow → multi-source government data
   - Data quality validation + cleaning with explicit rules and reporting.
 - Intelligent analysis:
   - Meaningful statistical analysis (time trends, YoY change, correlation where appropriate).
-  - Policy-oriented insight objects with **citations to data sources**.
+  - Policy-oriented insight objects with **citations, provenance, and confidence scores**.
   - Visualisations suitable for policy briefing.
 - Full-stack app:
-  - Frontend: query input, live agent monitor (reason/action/observation), dashboard, history, export.
+  - Frontend: query input, **plan review / approve / abort**, live agent monitor (reason/action/observation), dashboard, history, export.
   - Backend: REST APIs, async task processing for long runs, DB storage, WebSocket streaming.
 - Multi-cloud LLM integration:
   - At least **two** providers (e.g., OpenAI + Bedrock/Gemini/Azure OpenAI).
   - Fallback mechanism with health checks / timeouts / retry.
-  - LLM used for interpretation and narration — not for numeric computation.
+  - LLM used for interpretation and narration — **never for numeric computation**.
 - Agentic framework + ReAct:
   - LangGraph (preferred) or equivalent orchestration.
-  - Explicit ReAct loop per agent with tool calls and observations persisted.
-  - Graceful failure handling (fallback to alternate source/LLM, partial results).
+  - Explicit ReAct loop per agent with reasoning traces persisted for auditability.
+  - Graceful failure handling (fallback to alternate source/LLM, partial results with warnings).
 - Testing:
   - Unit tests (agents/tools/API).
   - Integration tests (multi-agent workflow).
@@ -42,7 +47,7 @@ natural-language query → multi-agent workflow → multi-source government data
   - CI pipeline (GitHub Actions) running tests + lint.
   - Clear docs for setup, run, test, and demo.
 
-### Nice-to-have 
+### Nice-to-have
 - Streaming partial results as they become available.
 - Vector store for dataset metadata + semantic retrieval of prior analyses.
 - Cost tracking per run (LLM token usage + external API calls).
@@ -52,7 +57,7 @@ natural-language query → multi-agent workflow → multi-source government data
 - Auth/RBAC/SSO
 - Production-grade data lake
 - Heavy ML forecasting models
-- Complex multi-tenant governance workflows
+- Complex multi-tenant governance workflows  
 (These can be discussed as “future work” in the innovation section.)
 
 ## 2) Tech Choices
@@ -87,12 +92,14 @@ natural-language query → multi-agent workflow → multi-source government data
 
 ### Request lifecycle
 1. User submits query in UI.
-2. Backend creates a `run` record and enqueues async job.
-3. Coordinator agent plans tasks, emits events.
-4. Extraction agent fetches/normalises/validates datasets, stores artifacts + provenance.
-5. Analytics agent computes results, generates structured insights + charts.
-6. Report generator produces a final report with citations.
-7. UI receives WebSocket events in real-time and renders:
+2. Backend creates a `run` record and presents proposed agent plan.
+3. User approves / edits / aborts plan.
+4. Backend enqueues async job.
+5. Coordinator agent executes approved plan, emits events.
+6. Extraction agent fetches/normalises/validates datasets, stores artifacts + provenance.
+7. Analytics agent computes results, generates structured insights + charts.
+8. Report generator produces a final report with citations and confidence scores.
+9. UI receives WebSocket events in real-time and renders:
    - agent timeline
    - intermediate artifacts (datasets, charts)
    - final dashboard + export actions
@@ -137,7 +144,7 @@ natural-language query → multi-agent workflow → multi-source government data
 - Parse dates to canonical form
 - Convert numeric strings to floats/ints
 - Handle missing values (drop/forward-fill/interpolate depending on metric)
-- Outlier detection (simple z-score or IQR; label not delete unless configured)
+- Outlier detection (simple z-score or IQR; label, not delete, unless configured)
 
 All checks emit structured events and are visible in UI.
 
@@ -171,6 +178,12 @@ All checks emit structured events and are visible in UI.
 
 UI shows a timeline with filtering by agent and phase.
 
+### Governance signals exposed in UI
+- Agent role and authority boundaries
+- Data source provenance per action
+- Confidence / uncertainty indicators on insights
+- Explicit warnings on partial, degraded, or low-confidence outputs
+
 ## 8) Multi-Cloud LLM Strategy
 
 ### Principles
@@ -188,7 +201,7 @@ UI shows a timeline with filtering by agent and phase.
 - If Provider A fails (timeout/rate limit/5xx), route to Provider B.
 - If both fail, degrade gracefully:
   - show extracted data + computed charts
-  - skip narrative or use template-based wording
+  - skip narrative or use template-based wording with warnings
 
 ## 9) Testing Strategy
 
@@ -204,7 +217,7 @@ UI shows a timeline with filtering by agent and phase.
 - Multi-agent workflow produces:
   - datasets persisted
   - events streamed
-  - insights contain citations
+  - insights contain citations and confidence scores
 
 ### LLM-specific tests
 - Citation enforcement: fail if insight lacks citation or references unknown dataset.
@@ -247,13 +260,14 @@ UI shows a timeline with filtering by agent and phase.
 
 ### What to show live
 - Query submission
-- Coordinator plan generation
+- Coordinator plan proposal → human approval
 - Extraction from 2 sources + validation logs
 - Analytics charts and computed tables
-- Final insights with citations
+- Final insights with citations and confidence scores
 - Export report
 - Failure demo:
-  - simulate API failure and show fallback/retry
+  - simulate API failure or LLM timeout
+  - show fallback, partial results, and user-facing warning
 
 ## 12) AI-Assisted Development Workflow (repo discipline)
 
