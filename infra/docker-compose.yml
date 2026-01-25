@@ -1,0 +1,82 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: imda_postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: imda_policy
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d imda_policy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - imda_network
+
+  redis:
+    image: redis:7
+    container_name: imda_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - imda_network
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: imda_api
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres:5432/imda_policy
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - imda_network
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: imda_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: development
+    networks:
+      - imda_network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  imda_network:
+    driver: bridge

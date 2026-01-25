@@ -1,0 +1,264 @@
+openapi: 3.0.0
+info:
+  title: Agentic Policy Analytics API
+  version: 0.1.0
+  description: REST API for multi-agent policy analytics platform
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      tags:
+        - System
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+
+  /runs:
+    post:
+      summary: Create a new analytics run
+      tags:
+        - Runs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                  description: Natural language policy analytics question
+                  example: "What is the employment trend over the past 3 years?"
+                time_range:
+                  type: object
+                  properties:
+                    start_date:
+                      type: string
+                      format: date
+                    end_date:
+                      type: string
+                      format: date
+              required:
+                - query
+      responses:
+        '201':
+          description: Run created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [queued, planning, executing, completed, failed]
+                  created_at:
+                    type: string
+                    format: date-time
+
+    get:
+      summary: List all runs
+      tags:
+        - Runs
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [queued, planning, executing, completed, failed]
+      responses:
+        '200':
+          description: List of runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Run'
+                  total:
+                    type: integer
+
+  /runs/{run_id}:
+    get:
+      summary: Get run details
+      tags:
+        - Runs
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunDetail'
+        '404':
+          description: Run not found
+
+  /runs/{run_id}/events:
+    get:
+      summary: Get events for a run
+      tags:
+        - Runs
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+
+  /runs/{run_id}/approve:
+    post:
+      summary: Approve plan before execution
+      tags:
+        - Runs
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Plan approved, execution started
+        '400':
+          description: Run not in planning state
+
+  /runs/{run_id}/abort:
+    post:
+      summary: Abort a running execution
+      tags:
+        - Runs
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Execution aborted
+
+  /runs/{run_id}/report:
+    get:
+      summary: Export run results as report
+      tags:
+        - Reports
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, markdown, pdf]
+            default: json
+      responses:
+        '200':
+          description: Report in requested format
+
+components:
+  schemas:
+    Run:
+      type: object
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        query:
+          type: string
+        status:
+          type: string
+          enum: [queued, planning, executing, completed, failed]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RunDetail:
+      allOf:
+        - $ref: '#/components/schemas/Run'
+        - type: object
+          properties:
+            plan:
+              type: object
+              description: Coordinator's proposed plan
+            insights:
+              type: array
+              items:
+                type: object
+            error:
+              type: string
+              description: Error message if status is failed
+
+    Event:
+      type: object
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        agent:
+          type: string
+          enum: [coordinator, extraction, analytics, report]
+        event_type:
+          type: string
+          enum: [thought, action, observation, decision]
+        content:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
