@@ -4,11 +4,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import health
 from app.core.config import settings
+from app.core.database import init_db
 
 app = FastAPI(
     title=settings.app_name,
     debug=settings.debug,
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on application startup."""
+    init_db()
+    print("✓ Database initialized")
 
 # CORS middleware
 app.add_middleware(
