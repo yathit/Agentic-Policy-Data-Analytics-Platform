@@ -257,6 +257,7 @@ UI shows a timeline with filtering by agent and phase.
 
 ### Demo query (primary)
 “Analyse employment trends in the technology sector from 2020–2024.”
+“Analyse AI and digital economy workforce trends in Singapore from 2019–2024, and assess potential talent gaps relevant to AI governance and digital regulation.”
 
 ### What to show live
 - Query submission
