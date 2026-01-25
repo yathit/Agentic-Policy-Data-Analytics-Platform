@@ -104,3 +104,106 @@ Data is **synthetic but policy-plausible**, derived from publicly observable IMD
 
 Each data source implements a common interface:
 
+```
+
+discover(intent) -> dataset_candidates
+fetch(dataset_ref) -> raw_bytes
+parse(raw_bytes) -> DataFrame
+validate(df) -> quality_report
+clean(df) -> cleaned_df, cleaning_log
+
+```
+
+This ensures all sources behave consistently within the agent workflow.
+
+---
+
+## Data Validation Rules (Minimum)
+
+Each dataset must pass or emit warnings for:
+
+- Required columns present
+- Datatypes coercible (date / numeric / categorical)
+- Missing value thresholds
+- Duplicate row detection (where applicable)
+- Time-series continuity (gap detection)
+
+Validation results are stored as structured JSON and surfaced to agents and UI.
+
+---
+
+## Data Cleaning Rules
+
+Cleaning steps are **transparent and logged**:
+
+- Normalize column names (snake_case)
+- Parse dates to ISO format
+- Convert numeric strings to floats/ints
+- Handle missing values (drop, forward-fill, or interpolate)
+- Flag outliers (do not delete by default)
+
+No silent mutations are allowed.
+
+---
+
+## Provenance & Metadata
+
+Every dataset ingested must persist:
+
+- Source name
+- URI / endpoint
+- Retrieval timestamp
+- File checksum
+- Row count
+- Schema snapshot
+- Validation report
+- Cleaning log
+
+This metadata is required for citation and auditability.
+
+---
+
+## Deliverables
+
+By completion of this task:
+
+- Data connectors for:
+  - Data.gov.sg
+  - DOS SingStat
+  - Mock internal PostgreSQL dataset
+- Seed script for internal dataset
+- Validation and cleaning pipeline
+- Documentation ready for `DATA_SOURCES.md`
+
+---
+
+## Acceptance Criteria
+
+- At least **two external government sources** integrated
+- At least **two file formats** supported
+- Internal dataset seeded and queryable
+- Validation warnings are emitted and persisted
+- Provenance metadata stored for every dataset
+- No analytics or UI logic introduced
+
+---
+
+## Verification
+
+Manual:
+- Run seed script and verify internal tables
+- Trigger extraction for one dataset per source
+
+Automated:
+- Unit tests for each connector
+- Validation test for missing/invalid columns
+
+---
+
+## Notes
+
+This task establishes the **trust boundary** of the system.  
+All downstream analytics and LLM narration depend on the correctness and transparency of these data sources.
+
+
+
