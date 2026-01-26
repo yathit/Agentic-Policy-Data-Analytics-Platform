@@ -30,6 +30,10 @@ app.add_middleware(
 # Include routers
 app.include_router(health.router, tags=["health"])
 
+# Import and include agent routes
+from app.api.routes import agents
+app.include_router(agents.router, tags=["agents"])
+
 
 @app.get("/")
 async def root():

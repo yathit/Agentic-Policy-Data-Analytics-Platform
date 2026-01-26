@@ -255,6 +255,7 @@ Keep prompts strict about:
 * `/backend/app/llm/router.py`
 * `/backend/app/schemas/events.py` + `/backend/app/schemas/plan.py`
 * `/backend/app/tools/*` (connectors + validators callable from Extraction)
+* Documentation ready for `AGENTS.md`
 
 ---
 

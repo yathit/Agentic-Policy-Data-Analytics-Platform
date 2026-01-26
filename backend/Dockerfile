@@ -18,6 +18,7 @@ RUN poetry config virtualenvs.create false \
 # Copy application code and tests
 COPY app/ ./app/
 COPY tests/ ./tests/
+# Note: .llm/ and demo_agents.py are mounted as volumes in docker-compose.yml
 
 # Expose port
 EXPOSE 8000

@@ -47,10 +47,15 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_DB: 0
+      # LLM API Keys (add to .env file)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     ports:
       - "8000:8000"
     volumes:
       - ../backend/app:/app/app
+      - ../.llm:/app/.llm
+      - ../backend/demo_agents.py:/app/demo_agents.py
     depends_on:
       postgres:
         condition: service_healthy
