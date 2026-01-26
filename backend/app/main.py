@@ -1,14 +1,25 @@
 """Main FastAPI application."""
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 
 from app.api.routes import health
+from app.api.routes import runs
+from app.api.routes import ws
+from app.api.errors import (
+    APIException,
+    api_exception_handler,
+    http_exception_handler,
+    validation_exception_handler,
+)
 from app.core.config import settings
 from app.core.database import init_db
 
 app = FastAPI(
     title=settings.app_name,
     debug=settings.debug,
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 
@@ -16,7 +27,13 @@ app = FastAPI(
 async def startup_event():
     """Initialize database on application startup."""
     init_db()
-    print("✓ Database initialized")
+    print("Database initialized")
+
+
+# Exception handlers for Problem JSON responses
+app.add_exception_handler(APIException, api_exception_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 # CORS middleware
 app.add_middleware(
@@ -29,6 +46,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(health.router, tags=["health"])
+app.include_router(runs.router)
+app.include_router(ws.router)
 
 # Import and include agent routes
 from app.api.routes import agents

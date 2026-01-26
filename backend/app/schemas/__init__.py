@@ -1,6 +1,6 @@
 """Schema definitions for events, plans, and agent communication."""
 
-from app.schemas.events import AgentEvent, EventPhase
+from app.schemas.events import AgentEvent, EventPhase, AgentType
 from app.schemas.plan import (
     Intent,
     DataSource,
@@ -9,14 +9,53 @@ from app.schemas.plan import (
     Guardrails,
     Plan,
 )
+from app.schemas.run import (
+    CreateRunRequest,
+    CreateRunResponse,
+    ApproveRunRequest,
+    ApproveRunResponse,
+    AbortRunResponse,
+    RunResponse,
+    RunListResponse,
+    RunListItem,
+    PlanResponse,
+    PlanStepResponse,
+    EventResponse,
+    EventListResponse,
+    ArtifactsResponse,
+    ProblemResponse,
+    ValidationErrorItem,
+    WebSocketEventMessage,
+    WebSocketSnapshotMessage,
+    WebSocketHeartbeatMessage,
+)
 
 __all__ = [
     "AgentEvent",
     "EventPhase",
+    "AgentType",
     "Intent",
     "DataSource",
     "ExtractionStep",
     "AnalysisStep",
     "Guardrails",
     "Plan",
+    "CreateRunRequest",
+    "CreateRunResponse",
+    "ApproveRunRequest",
+    "ApproveRunResponse",
+    "AbortRunResponse",
+    "RunResponse",
+    "RunListResponse",
+    "RunListItem",
+    "PlanResponse",
+    "PlanStepResponse",
+    "EventResponse",
+    "EventListResponse",
+    "ArtifactsResponse",
+    "ProblemResponse",
+    "ValidationErrorItem",
+    "WebSocketEventMessage",
+    "WebSocketSnapshotMessage",
+    "WebSocketHeartbeatMessage",
 ]

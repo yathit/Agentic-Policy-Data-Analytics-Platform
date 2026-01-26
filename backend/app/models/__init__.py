@@ -8,10 +8,22 @@ from app.models.dataset import (
     ValidationReport,
     CleaningLog,
 )
+from app.models.run import (
+    Run,
+    RunStatus,
+    Plan,
+    Event,
+    Artifact,
+)
 
 __all__ = [
     "Dataset",
     "DatasetProvenance",
     "ValidationReport",
     "CleaningLog",
+    "Run",
+    "RunStatus",
+    "Plan",
+    "Event",
+    "Artifact",
 ]

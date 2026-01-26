@@ -46,5 +46,6 @@ def init_db() -> None:
     """
     # Import all models here to ensure they are registered with Base
     from app.models import dataset  # noqa: F401
+    from app.models import run  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
