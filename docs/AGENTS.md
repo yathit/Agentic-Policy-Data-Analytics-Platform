@@ -743,8 +743,22 @@ docker-compose exec api pytest -v
 4. **Advanced Failure Handling**: Retry with alternate datasets
 5. **Agent Performance Metrics**: Track latency, success rates, LLM costs
 
+## Demo Queries
+
+For a comprehensive list of example queries to test the system, see **[DEMO_QUERIES.md](DEMO_QUERIES.md)**.
+
+### Quick Examples
+
+| Query Type | Example |
+|------------|---------|
+| Trend Analysis | "What has been the trend in Singapore's tech sector employment from 2019 to 2023?" |
+| Comparison | "Compare digital adoption rates across different demographics" |
+| Breakdown | "Show employment breakdown by local vs foreign workers in the digital sector" |
+| Correlation | "Is there a correlation between AI training completion and employment rates?" |
+
 ## References
 
+- Demo queries: [DEMO_QUERIES.md](DEMO_QUERIES.md)
 - Task specification: `.llm/tasks/003-agents.md`
 - LangGraph docs: https://langchain-ai.github.io/langgraph/
 - ReAct paper: https://arxiv.org/abs/2210.03629

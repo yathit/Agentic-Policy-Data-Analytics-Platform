@@ -35,7 +35,7 @@ export default function Home() {
         requested_sources: selectedSources.length > 0 ? selectedSources : undefined,
       });
       // Navigate to the run detail page
-      router.push(`/runs/${result.run_id}`);
+      router.push(`/runs/${result.run.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create run');
       setIsSubmitting(false);

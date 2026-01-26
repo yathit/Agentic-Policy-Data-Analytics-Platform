@@ -158,6 +158,21 @@ async def health_check():
 
 
 # ============================================================================
+# Sources Endpoint
+# ============================================================================
+
+@router.get("/sources")
+async def list_sources():
+    """List available data sources."""
+    return [
+        {"id": "imda-stats", "name": "IMDA Statistics", "recommended": True},
+        {"id": "govtech-data", "name": "GovTech Open Data", "recommended": True},
+        {"id": "singstat", "name": "SingStat Data", "recommended": True},
+        {"id": "external-apis", "name": "External APIs", "recommended": False},
+    ]
+
+
+# ============================================================================
 # Runs Endpoints
 # ============================================================================
 

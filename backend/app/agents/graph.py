@@ -92,12 +92,14 @@ class AgentOrchestrator:
         workflow.add_edge("interpret_query", "wait_approval")
 
         # Conditional edge: wait for approval
+        # Note: "waiting" goes to END to pause execution at the approval gate.
+        # Use continue_after_approval() to resume after user approves the plan.
         workflow.add_conditional_edges(
             "wait_approval",
             self._check_approval,
             {
                 "approved": "run_extraction",
-                "waiting": "wait_approval",
+                "waiting": END,  # Pause here - resume via continue_after_approval()
                 "rejected": END,
             },
         )
