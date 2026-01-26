@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, use } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { getRun, getRunPlan, getRunArtifacts, approveRun, abortRun } from '@/lib/api';
 import { WebSocketClient } from '@/lib/ws';
@@ -12,11 +12,11 @@ import ArtifactsPanel from '@/components/ArtifactsPanel';
 import ExportButtons from '@/components/ExportButtons';
 
 interface RunDetailPageProps {
-  params: Promise<{ runId: string }>;
+  params: { runId: string };
 }
 
 export default function RunDetailPage({ params }: RunDetailPageProps) {
-  const { runId } = use(params);
+  const { runId } = params;
 
   const [run, setRun] = useState<Run | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -33,7 +33,7 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
       setRun(runData);
 
       // Fetch plan if available
-      if (['needs_approval', 'running', 'completed', 'failed'].includes(runData.status)) {
+      if (['needs_approval', 'awaiting_approval', 'running', 'completed', 'failed'].includes(runData.status)) {
         try {
           const planData = await getRunPlan(runId);
           setPlan(planData);
@@ -246,7 +246,7 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
         <div className="bg-white rounded-lg border border-gray-200 p-4 mb-6">
           <h2 className="text-sm font-medium text-gray-500 mb-2">Query</h2>
           <p className="text-gray-900">{run.query}</p>
-          {run.selected_sources.length > 0 && (
+          {run.selected_sources && run.selected_sources.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
               {run.selected_sources.map((source) => (
                 <span
@@ -268,8 +268,8 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
           </div>
         )}
 
-        {/* Plan Review (for needs_approval status) */}
-        {run.status === 'needs_approval' && plan && (
+        {/* Plan Review (for needs_approval/awaiting_approval status) */}
+        {(run.status === 'needs_approval' || run.status === 'awaiting_approval') && plan && (
           <div className="mb-6">
             <PlanReviewCard
               plan={plan}
@@ -300,7 +300,7 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
             </div>
 
             {/* Plan display (when not in approval state) */}
-            {plan && run.status !== 'needs_approval' && (
+            {plan && run.status !== 'needs_approval' && run.status !== 'awaiting_approval' && (
               <div className="bg-white rounded-lg border border-gray-200 p-4">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">
                   Execution Plan

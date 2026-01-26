@@ -21,6 +21,12 @@ const statusConfig: Record<
     textColor: 'text-yellow-800',
     dotColor: 'bg-yellow-500',
   },
+  awaiting_approval: {
+    label: 'Awaiting Approval',
+    bgColor: 'bg-yellow-100',
+    textColor: 'text-yellow-800',
+    dotColor: 'bg-yellow-500',
+  },
   running: {
     label: 'Running',
     bgColor: 'bg-blue-100',
