@@ -173,6 +173,7 @@ class Evidence(BaseModel):
 
 class InsightResponse(BaseModel):
     """Insight artifact."""
+    id: UUID
     headline: str
     evidence: List[Evidence]
     policy_implication: Optional[str] = None

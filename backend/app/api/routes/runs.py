@@ -486,7 +486,10 @@ async def get_artifacts(
                 )
                 for c in insight.get("citations", [])
             ]
+            # Use stored id or generate one
+            insight_id = uuid.UUID(insight["id"]) if insight.get("id") else uuid.uuid4()
             insights.append(InsightResponse(
+                id=insight_id,
                 headline=insight.get("headline", ""),
                 evidence=evidence,
                 policy_implication=insight.get("policy_implication"),
