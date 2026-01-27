@@ -46,6 +46,10 @@ const agentConfig: Record<AgentType, { label: string; color: string }> = {
     label: 'Analytics',
     color: 'bg-amber-500',
   },
+  report: {
+    label: 'Report',
+    color: 'bg-rose-500',
+  },
 };
 
 function formatTime(ts: string): string {
@@ -88,21 +92,22 @@ export default function AgentTimeline({ events, filters }: AgentTimelineProps) {
         {filteredEvents.map((event, index) => {
           const phase = phaseConfig[event.phase];
           const agent = agentConfig[event.agent];
+          const agentMeta = agent ?? { label: event.agent, color: 'bg-gray-400' };
 
           return (
             <div key={index} className="relative pl-10">
               {/* Timeline dot */}
               <div
-                className={`absolute left-2.5 w-3 h-3 rounded-full ${agent.color} ring-4 ring-white`}
+                className={`absolute left-2.5 w-3 h-3 rounded-full ${agentMeta.color} ring-4 ring-white`}
               />
 
               <div className="bg-white border rounded-lg p-4 shadow-sm">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <span
-                      className={`text-xs font-medium px-2 py-0.5 rounded ${agent.color} text-white`}
+                      className={`text-xs font-medium px-2 py-0.5 rounded ${agentMeta.color} text-white`}
                     >
-                      {agent.label}
+                      {agentMeta.label}
                     </span>
                     <span
                       className={`text-xs font-medium px-2 py-0.5 rounded ${phase.color}`}
