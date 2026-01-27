@@ -11,7 +11,9 @@
       "Bash(git commit -m \"$\\(cat <<''EOF''\nRemove Python bytecode files from tracking\n\n- Add comprehensive Python section to .gitignore\n- Remove all __pycache__/*.pyc files from git tracking\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(npm install)",
       "Bash(npm run lint:*)",
-      "Bash(xargs git rm:*)"
+      "Bash(xargs git rm:*)",
+      "Bash(docker info:*)",
+      "Bash(docker-compose run:*)"
     ]
   }
 }

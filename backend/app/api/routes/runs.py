@@ -234,24 +234,52 @@ async def list_runs(
     db: Session = Depends(get_db),
 ):
     """List runs with cursor-based pagination."""
-    query = db.query(Run).order_by(Run.created_at.desc())
+    from sqlalchemy import or_, and_
+
+    # Sort by created_at desc, then by id for stable ordering
+    query = db.query(Run).order_by(Run.created_at.desc(), Run.id.desc())
 
     # Apply cursor if provided
     if cursor:
         try:
-            cursor_time = datetime.fromisoformat(cursor)
-            query = query.filter(Run.created_at < cursor_time)
-        except ValueError:
+            # Parse cursor - can be either "id" (new format) or "timestamp" (legacy)
+            try:
+                cursor_uuid = uuid.UUID(cursor)
+                # ID-based cursor: exclude this ID and all IDs that would come before it in sort order
+                # Since we sort by (created_at DESC, id DESC), we need items that come "after"
+                # the cursor in that order. We use a subquery to get the cursor row's created_at.
+                from sqlalchemy import select
+                cursor_created_at = (
+                    select(Run.created_at)
+                    .where(Run.id == cursor_uuid)
+                    .scalar_subquery()
+                )
+                # Filter for rows after the cursor: either earlier timestamp, or same timestamp but smaller ID
+                query = query.filter(
+                    or_(
+                        Run.created_at < cursor_created_at,
+                        and_(
+                            Run.created_at == cursor_created_at,
+                            Run.id < cursor_uuid
+                        )
+                    )
+                )
+            except ValueError:
+                # Legacy cursor format (timestamp only) - for backwards compatibility
+                cursor_time = datetime.fromisoformat(cursor)
+                query = query.filter(Run.created_at < cursor_time)
+        except (ValueError, TypeError):
             raise ValidationException("Invalid cursor format")
 
     # Fetch one more than limit to determine if there are more results
     runs = query.limit(limit + 1).all()
 
-    # Determine next cursor
+    # Determine next cursor (just use the ID)
     next_cursor = None
     if len(runs) > limit:
         runs = runs[:limit]
-        next_cursor = runs[-1].created_at.isoformat()
+        last_run = runs[-1]
+        next_cursor = str(last_run.id)
 
     items = [
         RunListItem(

@@ -23,6 +23,14 @@ Implement a comprehensive, demo-ready test suite that covers:
 
 ---
 
+## Prerequisites
+
+- **Docker** and **Docker Compose** installed on the host
+- No Python, Node.js, or other runtime installations required on host
+- All dependencies are managed inside containers
+
+---
+
 ## Files to add / modify
 
 ### Backend
