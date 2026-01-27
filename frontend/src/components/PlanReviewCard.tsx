@@ -17,11 +17,13 @@ export default function PlanReviewCard({
   loading = false,
 }: PlanReviewCardProps) {
   const [showEditMode, setShowEditMode] = useState(false);
+  const constraints = plan.constraints || {};
+  const allowedSources = constraints.allowed_sources || [];
   const [editedSources, setEditedSources] = useState<string[]>(
-    plan.constraints.allowed_sources
+    allowedSources
   );
   const [editedTimeRange, setEditedTimeRange] = useState(
-    plan.constraints.time_range || { start: '', end: '' }
+    constraints.time_range || { start: '', end: '' }
   );
 
   const handleApprove = () => {
@@ -82,7 +84,7 @@ export default function PlanReviewCard({
                     </span>
                   </div>
                   <p className="text-sm text-gray-600">
-                    {step.expected_output}
+                    {step.expected_output || JSON.stringify(step.inputs)}
                   </p>
                 </div>
               </li>
@@ -111,7 +113,7 @@ export default function PlanReviewCard({
                   Allowed Sources
                 </label>
                 <div className="flex flex-wrap gap-2">
-                  {plan.constraints.allowed_sources.map((source) => (
+                  {allowedSources.map((source) => (
                     <label
                       key={source}
                       className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border rounded cursor-pointer hover:bg-gray-50"
@@ -159,7 +161,7 @@ export default function PlanReviewCard({
           ) : (
             <div className="p-4 bg-gray-50 rounded-lg">
               <div className="flex flex-wrap gap-2 mb-2">
-                {plan.constraints.allowed_sources.map((source) => (
+                {allowedSources.map((source) => (
                   <span
                     key={source}
                     className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded"
@@ -168,10 +170,10 @@ export default function PlanReviewCard({
                   </span>
                 ))}
               </div>
-              {plan.constraints.time_range && (
+              {constraints.time_range && (
                 <p className="text-sm text-gray-600">
-                  Time range: {plan.constraints.time_range.start} to{' '}
-                  {plan.constraints.time_range.end}
+                  Time range: {constraints.time_range.start} to{' '}
+                  {constraints.time_range.end}
                 </p>
               )}
             </div>

@@ -269,6 +269,24 @@ docker system prune -a
 docker compose -f infra/docker-compose.yml up --build
 ```
 
+## Frontend Debug Mode (Docker, no build)
+
+Use this when you want Next.js to run in dev mode (no production build, hot reload).
+
+1. Stop the production frontend container (keep API running):
+```bash
+docker-compose -f infra/docker-compose.yml stop frontend
+```
+
+2. Run the frontend dev server in Docker:
+```bash
+docker run --rm -it -p 3000:3000 -e NEXT_PUBLIC_API_URL=http://localhost:8000 -v "$(pwd)/frontend:/app" -w /app node:20-alpine sh -c "npm install && npm run dev"
+```
+
+Notes:
+- This uses the local `frontend/` source directly (no compiled build).
+- Keep `docker compose -f infra/docker-compose.yml up` running for the API/DB/Redis.
+
 ## Project Structure
 
 ```
