@@ -48,7 +48,7 @@ export default function Home() {
       <nav className="bg-white/80 backdrop-blur border-b border-gray-200">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
           <h1 className="font-semibold text-gray-900">
-            Policy Data Analytics
+            Agentic Policy Data Analytics Platform
           </h1>
           <Link
             href="/history"

@@ -13,7 +13,9 @@
       "Bash(npm run lint:*)",
       "Bash(xargs git rm:*)",
       "Bash(docker info:*)",
-      "Bash(docker-compose run:*)"
+      "Bash(docker-compose run:*)",
+      "Bash(dir \"c:\\\\Users\\\\kyawtun\\\\WebstormProjects\\\\Agentic-Policy-Data-Analytics-Platform\\\\frontend\")",
+      "Bash(dir \"c:\\\\Users\\\\kyawtun\\\\WebstormProjects\\\\Agentic-Policy-Data-Analytics-Platform\")"
     ]
   }
 }

@@ -1,4 +1,4 @@
-# IMDA Policy Data Analytics Platform - Local Development Guide
+# Agentic Policy Data Analytics Platform - Local Development Guide
 
 ## Overview
 
@@ -41,14 +41,11 @@ cd Agentic-Policy-Data-Analytics-Platform
 cp infra/.env.example infra/.env
 ```
 
-The default `.env` file contains:
+The default `.env` file contains only LLM API keys. Database and Redis
+settings are provided via defaults in `infra/docker-compose.yml`.
 ```env
-POSTGRES_USER=user
-POSTGRES_PASSWORD=password
-POSTGRES_DB=imda_policy
-DATABASE_URL=postgresql://user:password@postgres:5432/imda_policy
-REDIS_URL=redis://redis:6379/0
-ENVIRONMENT=development
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
 ```
 
 ### 3. Start All Services
@@ -84,7 +81,7 @@ Open your browser and navigate to:
 http://localhost:3000
 ```
 
-You should see the landing page with "IMDA GenAI Demo — Bootstrap OK".
+You should see the landing page with "Agentic Policy Data Analytics Platform".
 
 #### API Documentation
 FastAPI automatically generates interactive API docs:
@@ -276,42 +273,43 @@ docker compose -f infra/docker-compose.yml up --build
 
 ```
 Agentic-Policy-Data-Analytics-Platform/
-├── backend/                  # FastAPI application
-│   ├── app/
-│   │   ├── main.py          # FastAPI app entry point
-│   │   ├── core/
-│   │   │   └── config.py    # Configuration settings
-│   │   └── api/
-│   │       └── routes/
-│   │           └── health.py # Health check endpoint
-│   ├── tests/               # Pytest tests
-│   ├── pyproject.toml       # Python dependencies
-│   └── Dockerfile
-│
-├── frontend/                # Next.js application
-│   ├── src/
-│   │   └── app/
-│   │       ├── page.tsx     # Landing page
-│   │       ├── layout.tsx   # Root layout
-│   │       └── globals.css  # Global styles
-│   ├── package.json         # Node dependencies
-│   ├── next.config.js       # Next.js configuration
-│   └── Dockerfile
-│
-├── infra/                   # Infrastructure
-│   ├── docker-compose.yml   # Service orchestration
-│   ├── .env.example         # Environment template
-│   ├── .env                 # Local environment (git-ignored)
-│   └── scripts/
-│       └── seed_db.sh       # Database seeding (placeholder)
-│
-├── docs/                    # Documentation
-│   └── README.md            # This file
-│
-└── .llm/                    # AI agent configuration
-    ├── plan.md
-    ├── architecture.md
-    └── tasks/               # Task definitions
+|-- backend/                  # FastAPI application
+|   |-- app/
+|   |   |-- main.py            # FastAPI app entry point
+|   |   |-- core/
+|   |   |   `-- config.py      # Configuration settings
+|   |   `-- api/
+|   |       `-- routes/
+|   |           `-- health.py  # Health check endpoint
+|   |-- tests/                 # Pytest tests
+|   |-- pyproject.toml         # Python dependencies
+|   `-- Dockerfile
+|-- frontend/                  # Next.js application
+|   |-- src/
+|   |   `-- app/
+|   |       |-- page.tsx       # Landing page
+|   |       |-- layout.tsx     # Root layout
+|   |       `-- globals.css    # Global styles
+|   |-- package.json           # Node dependencies
+|   |-- next.config.js         # Next.js configuration
+|   `-- Dockerfile
+|-- infra/                     # Infrastructure
+|   |-- docker-compose.yml     # Service orchestration
+|   |-- .env.example           # Environment template
+|   |-- .env                   # Local environment (git-ignored)
+|   `-- scripts/
+|       `-- seed_db.sh         # Database seeding (placeholder)
+|-- docs/                      # Documentation
+|   |-- 1_README.md            # This file
+|   |-- 2_ARCHITECTURE.md
+|   |-- 3_AGENTS.md
+|   |-- 4_DATA_SOURCES.md
+|   `-- 5_DEMO_QUERIES.md
+|-- .llm/                      # AI agent configuration
+|   |-- plan.md
+|   |-- prompts/
+|   `-- tasks/                 # Task definitions
+`-- README.md                  # Root project README
 ```
 
 ## Next Steps
