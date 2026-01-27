@@ -191,6 +191,7 @@ async def create_run(
         query=request.query,
         constraints=request.constraints.model_dump() if request.constraints else None,
         status=RunStatus.AWAITING_APPROVAL,
+        selected_sources=request.requested_sources,
     )
     db.add(run)
     db.flush()
@@ -485,7 +486,10 @@ async def get_artifacts(
                 )
                 for c in insight.get("citations", [])
             ]
+            # Use stored id or generate one
+            insight_id = uuid.UUID(insight["id"]) if insight.get("id") else uuid.uuid4()
             insights.append(InsightResponse(
+                id=insight_id,
                 headline=insight.get("headline", ""),
                 evidence=evidence,
                 policy_implication=insight.get("policy_implication"),

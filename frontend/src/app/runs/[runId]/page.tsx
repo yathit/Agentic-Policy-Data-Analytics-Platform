@@ -10,6 +10,7 @@ import PlanReviewCard from '@/components/PlanReviewCard';
 import EventLog from '@/components/EventLog';
 import ArtifactsPanel from '@/components/ArtifactsPanel';
 import ExportButtons from '@/components/ExportButtons';
+import AgentActivityStatus from '@/components/AgentActivityStatus';
 
 interface RunDetailPageProps {
   params: { runId: string };
@@ -275,6 +276,13 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
           </div>
         )}
 
+        {/* Live Activity Status */}
+        <AgentActivityStatus
+          events={events}
+          runStatus={run.status}
+          wsStatus={wsStatus}
+        />
+
         {/* Plan Review (for needs_approval/awaiting_approval status) */}
         {(run.status === 'needs_approval' || run.status === 'awaiting_approval') && plan && (
           <div className="mb-6">
@@ -296,12 +304,26 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
                 <h2 className="text-lg font-semibold text-gray-900">
                   Agent Activity
                 </h2>
-                {run.status === 'running' && (
-                  <span className="flex items-center gap-2 text-sm text-green-600">
-                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                    Live
-                  </span>
-                )}
+                <div className="flex items-center gap-2 text-sm">
+                  {wsStatus === 'connected' && (
+                    <span className="flex items-center gap-1 text-green-600">
+                      <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                      Live
+                    </span>
+                  )}
+                  {wsStatus === 'connecting' && (
+                    <span className="flex items-center gap-1 text-yellow-600">
+                      <span className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
+                      Connecting
+                    </span>
+                  )}
+                  {wsStatus === 'disconnected' && run.status === 'running' && (
+                    <span className="flex items-center gap-1 text-gray-500">
+                      <span className="w-2 h-2 bg-gray-400 rounded-full" />
+                      Polling
+                    </span>
+                  )}
+                </div>
               </div>
               <EventLog events={events} />
             </div>

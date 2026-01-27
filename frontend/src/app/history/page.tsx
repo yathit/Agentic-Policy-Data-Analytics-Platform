@@ -145,7 +145,7 @@ export default function HistoryPage() {
                         {new Date(run.created_at).toLocaleDateString()}{' '}
                         {new Date(run.created_at).toLocaleTimeString()}
                       </span>
-                      {run.selected_sources.length > 0 && (
+                      {run.selected_sources && run.selected_sources.length > 0 && (
                         <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">
                           {run.selected_sources.length} source
                           {run.selected_sources.length !== 1 ? 's' : ''}

@@ -286,6 +286,7 @@ docker run --rm -it -p 3000:3000 -e NEXT_PUBLIC_API_URL=http://localhost:8000 -v
 Notes:
 - This uses the local `frontend/` source directly (no compiled build).
 - Keep `docker compose -f infra/docker-compose.yml up` running for the API/DB/Redis.
+- After done debugging, rebuild the image `docker-compose -f infra/docker-compose.yml build --no-cache frontend`
 
 ## Project Structure
 

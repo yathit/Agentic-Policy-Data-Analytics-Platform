@@ -174,24 +174,21 @@ async def websocket_run_events(websocket: WebSocket, run_id: str):
         # Send initial snapshot
         await manager.send_snapshot(websocket, run_data, events_data)
 
-        # Keep connection alive and poll for new events
+        # Poll for new events on a short interval without waiting on client messages
         last_event_ts = events[-1].ts if events else datetime.min
+        poll_interval = 1.0
+        heartbeat_interval = 30.0
+        last_heartbeat = asyncio.get_running_loop().time()
 
         while True:
             try:
-                # Wait for message with timeout (heartbeat interval)
+                # Non-blocking receive for optional client messages
                 try:
-                    message = await asyncio.wait_for(
-                        websocket.receive_json(),
-                        timeout=30.0,
-                    )
-                    # Handle any client messages if needed
+                    message = await asyncio.wait_for(websocket.receive_json(), timeout=0.01)
                     if message.get("type") == "ping":
                         await manager.send_heartbeat(websocket)
-
                 except asyncio.TimeoutError:
-                    # Send heartbeat
-                    await manager.send_heartbeat(websocket)
+                    pass
 
                 # Poll for new events
                 db = SessionLocal()
@@ -226,12 +223,19 @@ async def websocket_run_events(websocket: WebSocket, run_id: str):
                             "status": run.status.value,
                             "finished_at": run.finished_at.isoformat() if run.finished_at else None,
                         })
-                        # Keep connection open for a bit to ensure client gets the message
                         await asyncio.sleep(1)
                         break
 
                 finally:
                     db.close()
+
+                # Heartbeat to keep connection alive
+                now = asyncio.get_running_loop().time()
+                if now - last_heartbeat >= heartbeat_interval:
+                    await manager.send_heartbeat(websocket)
+                    last_heartbeat = now
+
+                await asyncio.sleep(poll_interval)
 
             except WebSocketDisconnect:
                 break
