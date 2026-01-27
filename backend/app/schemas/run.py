@@ -70,6 +70,7 @@ class RunResponse(BaseModel):
     id: UUID
     query: str
     status: str
+    plan: Optional[PlanResponse] = None
     constraints: Optional[Dict[str, Any]] = None
     created_at: datetime
     started_at: Optional[datetime] = None

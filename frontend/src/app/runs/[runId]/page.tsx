@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { getRun, getRunPlan, getRunArtifacts, approveRun, abortRun } from '@/lib/api';
+import { getRun, getRunArtifacts, approveRun, abortRun } from '@/lib/api';
 import { WebSocketClient } from '@/lib/ws';
 import type { Run, Plan, Artifacts, AgentEvent } from '@/lib/types';
 import RunStatusBadge from '@/components/RunStatusBadge';
@@ -34,12 +34,7 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
 
       // Fetch plan if available
       if (['needs_approval', 'awaiting_approval', 'running', 'completed', 'failed'].includes(runData.status)) {
-        try {
-          const planData = await getRunPlan(runId);
-          setPlan(planData);
-        } catch {
-          // Plan might not be available yet
-        }
+        setPlan(runData.plan ?? null);
       }
 
       // Fetch artifacts if run has progressed
@@ -121,7 +116,14 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
   const handleApprove = async (edits?: { time_range?: { start: string; end: string }; sources?: string[] }) => {
     setActionLoading(true);
     try {
-      await approveRun(runId, edits ? { edits } : undefined);
+      if (!plan) {
+        throw new Error('Plan not available for approval');
+      }
+      await approveRun(runId, {
+        plan_id: plan.id,
+        approved: true,
+        edits: edits ? { ...edits } : undefined,
+      });
       await fetchRunData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to approve run');

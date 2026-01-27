@@ -49,12 +49,13 @@ def _get_run_or_404(db: Session, run_id: str) -> Run:
     return run
 
 
-def _run_to_response(run: Run) -> RunResponse:
+def _run_to_response(run: Run, include_plan: bool = False) -> RunResponse:
     """Convert Run model to RunResponse."""
     return RunResponse(
         id=run.id,
         query=run.query,
         status=run.status.value if isinstance(run.status, RunStatus) else run.status,
+        plan=_plan_to_response(run.plan) if include_plan and run.plan else None,
         constraints=run.constraints,
         created_at=run.created_at,
         started_at=run.started_at,
@@ -224,7 +225,7 @@ async def get_run(
 ):
     """Get a run by ID."""
     run = _get_run_or_404(db, run_id)
-    return _run_to_response(run)
+    return _run_to_response(run, include_plan=True)
 
 
 @router.get("/runs", response_model=RunListResponse)
