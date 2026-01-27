@@ -247,10 +247,11 @@ UI shows a timeline with filtering by agent and phase.
 - Build docker images (optional)
 
 ### Documentation deliverables
-- README.md (setup/run/test/demo)
-- ARCHITECTURE.md (agents + data flow + schema)
-- TESTING.md (strategy + LLM validation)
-- DATA_SOURCES.md (endpoints, formats, caveats)
+- 1_README.md (setup/run/test/demo)
+- 2_ARCHITECTURE.md (agents + data flow + schema)
+- 3_AGENTS.md (overview of LLM agents and query flow)
+- 4_DATA_SOURCES.md (endpoints, formats, caveats)
+- 5_DEMO_QUERIES (example query)
 - Optional: AI_ASSISTED_DEVELOPMENT.md (guardrails and verification approach)
 
 ## 11) Demo Plan (20 minutes)
