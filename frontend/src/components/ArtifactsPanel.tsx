@@ -75,10 +75,15 @@ export default function ArtifactsPanel({
     );
   }
 
+  const insights = artifacts.insights ?? [];
+  const charts = artifacts.charts ?? [];
+  const tables = artifacts.tables ?? [];
+  const datasets = artifacts.datasets ?? [];
+
   // Check if any artifacts are empty (degraded mode)
-  const hasInsights = artifacts.insights.length > 0;
-  const hasCharts = artifacts.charts.length > 0;
-  const hasTables = artifacts.tables.length > 0;
+  const hasInsights = insights.length > 0;
+  const hasCharts = charts.length > 0;
+  const hasTables = tables.length > 0;
   const isDegradedMode = !hasInsights && (hasCharts || hasTables);
 
   return (
@@ -117,12 +122,12 @@ export default function ArtifactsPanel({
           {tabs.map((tab) => {
             const count =
               tab.id === 'insights'
-                ? artifacts.insights.length
+                ? insights.length
                 : tab.id === 'charts'
-                ? artifacts.charts.length
+                ? charts.length
                 : tab.id === 'tables'
-                ? artifacts.tables.length
-                : artifacts.datasets.length;
+                ? tables.length
+                : datasets.length;
 
             return (
               <button
@@ -155,15 +160,15 @@ export default function ArtifactsPanel({
       <div className="py-4">
         {activeTab === 'insights' && (
           <InsightsPanel
-            insights={artifacts.insights}
+            insights={insights}
             onCitationClick={handleCitationClick}
           />
         )}
-        {activeTab === 'charts' && <ChartsPanel charts={artifacts.charts} />}
-        {activeTab === 'tables' && <TablesPanel tables={artifacts.tables} />}
+        {activeTab === 'charts' && <ChartsPanel charts={charts} />}
+        {activeTab === 'tables' && <TablesPanel tables={tables} />}
         {activeTab === 'provenance' && (
           <ProvenancePanel
-            datasets={artifacts.datasets}
+            datasets={datasets}
             highlightedDatasetId={highlightedDatasetId}
           />
         )}

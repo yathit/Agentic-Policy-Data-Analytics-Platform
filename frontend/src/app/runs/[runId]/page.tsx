@@ -22,6 +22,7 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [artifacts, setArtifacts] = useState<Artifacts | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -59,58 +60,62 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
     fetchRunData();
   }, [fetchRunData]);
 
-  // WebSocket connection for live events
+  // WebSocket connection for live updates
   useEffect(() => {
-    if (!run || run.status !== 'running') return;
-
     const ws = new WebSocketClient(runId, {
       onEvent: (event) => {
         setEvents((prev) => [...prev, event]);
       },
-      onStatusChange: (status) => {
-        if (status === 'connected') {
-          console.log('WebSocket connected');
+      onSnapshot: (snapshot) => {
+        const snapshotRun = snapshot.run as Run;
+        setRun(snapshotRun);
+        setPlan(snapshotRun?.plan ?? null);
+        setEvents(snapshot.events ?? []);
+      },
+      onStatus: (statusUpdate) => {
+        setRun((prev) => (prev ? { ...prev, status: statusUpdate.status as Run['status'], finished_at: statusUpdate.finished_at } : prev));
+        if (statusUpdate.status === 'completed' || statusUpdate.status === 'failed' || statusUpdate.status === 'aborted') {
+          getRunArtifacts(runId).then(setArtifacts).catch(() => {});
         }
       },
+      onStatusChange: (status) => {
+        setWsStatus(status);
+      },
       onError: (err) => {
-        console.error('WebSocket error:', err);
+        console.warn('WebSocket error:', err);
       },
     });
 
     ws.connect();
 
-    // Periodically refresh artifacts during running state
-    const artifactInterval = setInterval(async () => {
-      try {
-        const artifactsData = await getRunArtifacts(runId);
-        setArtifacts(artifactsData);
-      } catch {
-        // Ignore errors during periodic refresh
-      }
-    }, 5000);
+    return () => {
+      ws.disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId]);
 
-    // Poll for run status changes
+  // Fallback polling when WebSocket is disconnected
+  useEffect(() => {
+    if (wsStatus === 'connected') return;
+    if (!run || !['queued', 'running'].includes(run.status)) return;
+
     const statusInterval = setInterval(async () => {
       try {
         const runData = await getRun(runId);
         setRun(runData);
         if (runData.status !== 'running') {
-          // Run completed, do final artifact fetch
           const artifactsData = await getRunArtifacts(runId);
           setArtifacts(artifactsData);
         }
       } catch {
         // Ignore errors during polling
       }
-    }, 3000);
+    }, 5000);
 
     return () => {
-      ws.disconnect();
-      clearInterval(artifactInterval);
       clearInterval(statusInterval);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run?.status, runId]);
+  }, [run?.status, runId, wsStatus]);
 
   // Handle plan approval
   const handleApprove = async (edits?: { time_range?: { start: string; end: string }; sources?: string[] }) => {
