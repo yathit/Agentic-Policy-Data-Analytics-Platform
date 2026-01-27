@@ -102,17 +102,21 @@ def run_pipeline(self, run_id: str):
             payload={"candidates": ["data_gov_sg", "singstat"]},
         )
 
+        # Use user-selected sources or fall back to defaults
+        sources = run.selected_sources or ["data_gov_sg", "singstat"]
+
         emit_event(
             db,
             run_uuid,
             agent="coordinator",
             phase="observation",
             message="Sources selected successfully",
-            payload={"selected": ["data_gov_sg", "singstat"]},
+            payload={"selected": sources},
         )
 
-        # Update selected sources
-        run.selected_sources = ["data_gov_sg", "singstat"]
+        # Update selected sources if not already set
+        if not run.selected_sources:
+            run.selected_sources = sources
         db.commit()
 
         # === EXTRACTION PHASE ===

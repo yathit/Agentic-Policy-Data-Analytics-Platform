@@ -191,6 +191,7 @@ async def create_run(
         query=request.query,
         constraints=request.constraints.model_dump() if request.constraints else None,
         status=RunStatus.AWAITING_APPROVAL,
+        selected_sources=request.requested_sources,
     )
     db.add(run)
     db.flush()

@@ -29,6 +29,7 @@ class CreateRunRequest(BaseModel):
     """Request to create a new run."""
     query: str = Field(..., min_length=1, description="User query for analysis")
     constraints: Optional[RunConstraints] = None
+    requested_sources: Optional[List[str]] = Field(None, description="Requested data sources")
 
 
 class ApproveRunRequest(BaseModel):
