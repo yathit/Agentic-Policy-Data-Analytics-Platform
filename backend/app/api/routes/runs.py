@@ -9,7 +9,9 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models import Run, RunStatus, Plan, Event, Artifact
+from app.models import Run, RunStatus, Plan, Event, Artifact, Dataset
+from app.schemas.plan import Plan as StructuredPlan, Intent, TimeRange, DataSource, ExtractionStep, AnalysisStep
+from app.services.data_service import DataService
 from app.schemas.run import (
     CreateRunRequest,
     CreateRunResponse,
@@ -30,6 +32,7 @@ from app.schemas.run import (
     InsightResponse,
     Evidence,
     Citation,
+    DatasetInfo,
 )
 from app.api.errors import NotFoundError, ConflictError, ValidationException
 
@@ -106,9 +109,128 @@ def _event_to_response(event: Event) -> EventResponse:
     )
 
 
-def _generate_plan_steps(query: str, constraints: dict) -> list:
-    """Generate plan steps based on the query (stub implementation)."""
-    sources = constraints.get("sources_allowlist", ["data_gov_sg", "singstat"]) if constraints else ["data_gov_sg", "singstat"]
+def _normalize_sources(sources: Optional[list]) -> list:
+    """Normalize source identifiers to canonical values."""
+    if not sources:
+        return ["data.gov.sg", "singstat"]
+    normalized = []
+    for source in sources:
+        if source in ["data_gov_sg", "data.gov.sg"]:
+            normalized.append("data.gov.sg")
+        elif source in ["singstat"]:
+            normalized.append("singstat")
+        elif source in ["internal", "mock_internal"]:
+            normalized.append("internal")
+        else:
+            normalized.append(source)
+    return normalized
+
+
+def _parse_time_range(constraints: dict) -> TimeRange:
+    """Parse time range from constraints or use default."""
+    if constraints and constraints.get("time_range"):
+        start = constraints["time_range"].get("start", "")[:4]
+        end = constraints["time_range"].get("end", "")[:4]
+        if start and end:
+            return TimeRange(start=start, end=end)
+    return TimeRange(start="2020", end="2024")
+
+
+def _build_structured_plan(
+    query: str,
+    constraints: dict,
+    requested_sources: Optional[list],
+    db: Session,
+) -> StructuredPlan:
+    """Build a structured plan using dataset discovery."""
+    allowed_sources = _normalize_sources(
+        requested_sources or constraints.get("sources_allowlist")
+    )
+    time_range = _parse_time_range(constraints)
+    intent = Intent(
+        question=query,
+        time_range=time_range,
+        entities=[],
+        metrics=[],
+    )
+
+    data_service = DataService(db)
+    candidates = data_service.discover_datasets(query, sources=allowed_sources)
+
+    sources: list[DataSource] = []
+    extract_steps: list[ExtractionStep] = []
+    grouped: dict[str, list] = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate["source_type"], []).append(candidate)
+
+    for source_type in allowed_sources:
+        items = grouped.get(source_type, [])
+        if not items and source_type == "internal":
+            items = [{
+                "name": "Digital Sector Employment",
+                "description": "Internal default dataset",
+                "source_type": "internal",
+                "format": "database",
+                "uri": "table:digital_sector_employment",
+                "metadata": {},
+            }]
+        if not items:
+            continue
+
+        dataset_refs = []
+        for item in items[:2]:
+            dataset_refs.append(item["uri"])
+            extract_steps.append(
+                ExtractionStep(
+                    source=source_type,
+                    dataset_ref=item["uri"],
+                    notes=item.get("description") or f"Discovered for '{query}'",
+                )
+            )
+
+        sources.append(
+            DataSource(
+                name=source_type,
+                datasets=dataset_refs,
+                format=items[0].get("format", "unknown") if items else "unknown",
+            )
+        )
+
+    analysis_steps = [
+        AnalysisStep(
+            type="trend",
+            params={"metric": "value", "group_by": "year"},
+        )
+    ]
+
+    return StructuredPlan(
+        intent=intent,
+        sources=sources,
+        extract_steps=extract_steps,
+        analysis_steps=analysis_steps,
+        approved=False,
+    )
+
+
+def _generate_source_rationale(sources: list) -> list:
+    """Generate source rationale (simple heuristic)."""
+    rationale_map = {
+        "data.gov.sg": "Official open data portal with broad coverage",
+        "singstat": "Authoritative statistics and time-series indicators",
+        "internal": "Internal datasets with high trust and low latency",
+    }
+    return [
+        {"source": s, "why": rationale_map.get(s, "Selected based on query requirements")}
+        for s in sources
+    ]
+
+
+def _build_plan_steps_from_structured(plan: StructuredPlan) -> list:
+    """Create UI-friendly plan steps from a structured plan."""
+    sources = [source.name for source in plan.sources]
+    datasets = []
+    for source in plan.sources:
+        datasets.extend(source.datasets)
 
     return [
         {
@@ -122,29 +244,16 @@ def _generate_plan_steps(query: str, constraints: dict) -> list:
             "id": str(uuid.uuid4()),
             "agent": "extraction",
             "action": "fetch_datasets",
-            "inputs": {"sources": sources},
+            "inputs": {"sources": sources, "datasets": datasets},
             "requires_approval": False,
         },
         {
             "id": str(uuid.uuid4()),
             "agent": "analytics",
             "action": "compute_trends",
-            "inputs": {"metrics": ["employment", "yoy_change"]},
+            "inputs": {"metrics": plan.intent.metrics or ["value"]},
             "requires_approval": False,
         },
-    ]
-
-
-def _generate_source_rationale(sources: list) -> list:
-    """Generate source rationale (stub implementation)."""
-    rationale_map = {
-        "data_gov_sg": "Demo-friendly stable endpoints",
-        "singstat": "Format diversity (csv/excel)",
-        "internal_mock": "Internal testing data",
-    }
-    return [
-        {"source": s, "why": rationale_map.get(s, "Selected based on query requirements")}
-        for s in sources
     ]
 
 
@@ -166,10 +275,9 @@ async def health_check():
 async def list_sources():
     """List available data sources."""
     return [
-        {"id": "imda-stats", "name": "IMDA Statistics", "recommended": True},
-        {"id": "govtech-data", "name": "GovTech Open Data", "recommended": True},
+        {"id": "data.gov.sg", "name": "Data.gov.sg", "recommended": True},
         {"id": "singstat", "name": "SingStat Data", "recommended": True},
-        {"id": "external-apis", "name": "External APIs", "recommended": False},
+        {"id": "internal", "name": "IMDA Internal", "recommended": False},
     ]
 
 
@@ -186,26 +294,37 @@ async def create_run(
     Create a new run with a proposed plan.
     The run will be in 'awaiting_approval' status until approved.
     """
+    constraints_dict = request.constraints.model_dump() if request.constraints else {}
+
     # Create the run
     run = Run(
         query=request.query,
-        constraints=request.constraints.model_dump() if request.constraints else None,
+        constraints=constraints_dict or None,
         status=RunStatus.AWAITING_APPROVAL,
-        selected_sources=request.requested_sources,
+        selected_sources=_normalize_sources(
+            request.requested_sources
+            or constraints_dict.get("sources_allowlist")
+        ),
     )
     db.add(run)
     db.flush()
 
-    # Generate plan steps
-    constraints_dict = request.constraints.model_dump() if request.constraints else {}
-    steps = _generate_plan_steps(request.query, constraints_dict)
-    sources = constraints_dict.get("sources_allowlist", ["data_gov_sg", "singstat"])
+    # Generate structured plan and UI steps
+    structured_plan = _build_structured_plan(
+        request.query,
+        constraints_dict,
+        request.requested_sources,
+        db,
+    )
+    steps = _build_plan_steps_from_structured(structured_plan)
+    sources = [source.name for source in structured_plan.sources]
 
     # Create the plan
     plan = Plan(
         run_id=run.id,
         version=1,
         steps=steps,
+        plan_json=structured_plan.model_dump(),
         source_rationale=_generate_source_rationale(sources),
     )
     db.add(plan)
@@ -467,6 +586,7 @@ async def get_artifacts(
         }
 
     insights = None
+    dataset_ids = set()
     if artifact.insights:
         insights = []
         for insight in artifact.insights:
@@ -480,12 +600,15 @@ async def get_artifacts(
             ]
             citations = [
                 Citation(
-                    dataset_id=uuid.UUID(c["dataset_id"]) if c.get("dataset_id") else None,
+                    dataset_id=str(c["dataset_id"]) if c.get("dataset_id") is not None else None,
                     source=c.get("source", ""),
                     columns=c.get("columns", []),
                 )
                 for c in insight.get("citations", [])
             ]
+            for citation in citations:
+                if citation.dataset_id and citation.dataset_id.isdigit():
+                    dataset_ids.add(int(citation.dataset_id))
             # Use stored id or generate one
             insight_id = uuid.UUID(insight["id"]) if insight.get("id") else uuid.uuid4()
             insights.append(InsightResponse(
@@ -497,10 +620,29 @@ async def get_artifacts(
                 confidence=insight.get("confidence", 0.0),
             ))
 
+    datasets = None
+    if dataset_ids:
+        datasets = []
+        dataset_rows = (
+            db.query(Dataset)
+            .filter(Dataset.id.in_(dataset_ids))
+            .all()
+        )
+        for dataset in dataset_rows:
+            provenance = dataset.provenance
+            datasets.append(DatasetInfo(
+                id=str(dataset.id),
+                name=dataset.name,
+                uri=provenance.source_uri if provenance else "",
+                retrieved_at=(provenance.retrieved_at if provenance else dataset.created_at),
+                record_count=dataset.row_count,
+            ))
+
     return ArtifactsResponse(
         tables=tables,
         charts=charts,
         insights=insights,
+        datasets=datasets,
         report_md=artifact.report_md,
     )
 

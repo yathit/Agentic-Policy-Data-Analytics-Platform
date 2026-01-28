@@ -27,7 +27,7 @@ class TestCreateRun:
                 "query": "Analyse employment trends in the technology sector",
                 "constraints": {
                     "time_range": {"start": "2020-01-01", "end": "2024-12-31"},
-                    "sources_allowlist": ["data_gov_sg", "singstat"],
+                    "sources_allowlist": ["data.gov.sg", "singstat"],
                     "max_cost_sgd": 2.0,
                 },
             },

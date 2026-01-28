@@ -154,7 +154,7 @@ def demo_with_constraints():
 
         query = "Analyze digital transformation metrics"
         constraints = {
-            "allowed_sources": ["singstat", "mock_internal"],
+            "allowed_sources": ["singstat", "internal"],
             "time_limit": 30,  # seconds
         }
 

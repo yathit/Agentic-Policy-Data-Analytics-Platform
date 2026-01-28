@@ -11,7 +11,7 @@ Responsibilities:
 """
 
 import time
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from pathlib import Path
 from sqlalchemy.orm import Session
 
@@ -49,7 +49,7 @@ class ExtractionAgent:
     - No LLM usage (deterministic pipeline)
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, event_sink: Optional[Callable[[AgentEvent], None]] = None):
         """
         Initialize Extraction Agent.
 
@@ -59,12 +59,13 @@ class ExtractionAgent:
         self.db = db
         self.data_service = DataService(db)
         self.system_prompt = self._load_system_prompt()
+        self.event_sink = event_sink
 
         # Initialize connectors
         self.connectors: Dict[str, BaseConnector] = {
             "data.gov.sg": DataGovConnector(),
             "singstat": SingStatConnector(),
-            "mock_internal": InternalConnector(),
+            "internal": InternalConnector(),
         }
 
     def _load_system_prompt(self) -> str:
@@ -94,9 +95,17 @@ class ExtractionAgent:
             message=message,
             payload=payload or {},
         )
-        event_store.emit(event)
+        if self.event_sink:
+            self.event_sink(event)
+        else:
+            event_store.emit(event)
 
-    def run_extraction(self, run_id: str, approved_plan: Plan) -> List[ExtractionResult]:
+    def run_extraction(
+        self,
+        run_id: str,
+        approved_plan: Plan,
+        abort_check: Optional[Callable[[], bool]] = None,
+    ) -> List[ExtractionResult]:
         """
         Execute all extraction steps from approved plan.
 
@@ -120,6 +129,14 @@ class ExtractionAgent:
         results = []
 
         for step in approved_plan.extract_steps:
+            if abort_check and abort_check():
+                self._emit_event(
+                    run_id,
+                    EventPhase.DECISION,
+                    "Extraction aborted by user",
+                    {"status": "aborted"},
+                )
+                break
             result = self._execute_extraction_step(run_id, step)
             results.append(result)
 
