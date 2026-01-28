@@ -118,3 +118,48 @@ Loop pages, map each collection to row:
 * `payload = collection`
 
 Return summary: `pages_fetched`, `collections_seen`, `rows_inserted`, `errors` (optional).
+
+
+### DDL migration 
+
+Mount the DDL sql file into /docker-entrypoint-initdb.d/. as a one-shot migrate for postgres service in docker-compose file. 
+
+## Worker task
+
+### Contract
+
+**Module:** `app/workers/data_gov_sg_collections.py`
+
+* `run_data_gov_sg_collections_ingest() -> dict`
+
+Algorithm:
+
+1. Fetch page 1; read `pages`.
+2. Persist page 1.
+3. For page `2..pages`: fetch + persist.
+4. Return summary: `pages_fetched`, `collections_seen`, `rows_inserted`, `errors[]` (optional)
+
+Mapping:
+
+* `collection_id` = `collection["collectionId"]`
+* `lastUpdatedAt` = parse `collection["lastUpdatedAt"]`
+* `name` = `collection.get("name")`
+* `description` = `collection.get("description")`
+* `payload` = raw dict
+
+---
+
+## Error handling & retries
+
+* Retry transient failures (timeouts, 429, 5xx) with exponential backoff.
+* Hard-fail on response shape drift (missing `data.pages` / `data.collections`).
+* Record-level skip if missing `collectionId` or `lastUpdatedAt` (track in `errors[]`).
+
+---
+
+## Acceptance criteria
+
+* Worker fetches `page=1..pages` and persists all collections.
+* Idempotency holds on `(collection_id, lastUpdatedAt)`—no duplicates on re-run.
+* `data_gov_sg_collection_latest` returns exactly one row per `collection_id` (latest).
+* `data_gov_sg_collection_search(keyword, lim)` returns keyword matches over latest rows efficiently (indexes present).
