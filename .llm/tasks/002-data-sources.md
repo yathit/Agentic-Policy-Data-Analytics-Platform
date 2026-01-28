@@ -32,13 +32,24 @@ This task focuses on **data acquisition and validation only**. No analytics or U
 Primary open-data source for structured datasets suitable for demos and automated extraction.
 
 **Access Pattern**
-- REST API (`/api/action/datastore_search`)
-- Direct CSV download (fallback)
+- Dataset listing API (exact endpoint):
+  - `https://data.gov.sg/v1/public/api/datasets`
+
 
 **Typical Datasets**
 - Employment by industry
 - Workforce demographics
 - Sectoral output indicators
+
+**Hardcoded datasetId (required for bootstrapping)**
+Use these as fixed dataset seeds when discovery is not yet wired:
+- `d_bccdf7ae697389c5a7e8c3f9005a852a` - Principal Statistics Of Manufacturing By Industry Cluster - Employment, Annual
+- `d_623c5a2823d6ccd02c331719135108f9` - Resident Employees Aged 15 Years and Over by Industry, Nature of Employment and Sex (General Household Survey 2005)
+- `d_a326c13e94827819f8f1057c15f00221` - Changes In Employment By Sector, (Compared To The Previous Period), Annual
+- `d_31dec7667bc2c6b945a262cd60958eaf` - Changes In Employment By Sector, (Compared To The Previous Period), Quarterly
+- `d_c2b4d1a2c9bfc5d0df58dd339d8121a0` - Total Mobile Phone Subscriptions
+- `d_fcc02bc884c54a09e8665443bff2f4c2` - Individual Internet Usage
+- `d_5105c8c24199312306d1dd38bbc560a8` - Total Foreign Workforce
 
 **Formats**
 - JSON (API)
