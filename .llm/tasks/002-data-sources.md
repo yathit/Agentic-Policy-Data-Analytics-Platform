@@ -65,10 +65,13 @@ Use these as fixed dataset seeds when discovery is not yet wired:
 ### 2. DOS SingStat (External, Public)
 
 **Purpose**
-Authoritative national statistics source demonstrating Excel/CSV handling and schema normalization.
+Authoritative national statistics source; use SingStat Table Builder for time-series and cross-sectional tables.
 
 **Access Pattern**
-- Static file downloads (CSV / Excel)
+- Discover tables via SingStat Table Builder (free access to ~2,400 datasets / ~150,000 data series from 70 agencies). citeturn1view0
+- Prefer SingStat Table Builder APIs for commonly accessed tables (JSON/CSV). citeturn10view0
+- Use developer APIs for parameterized/custom queries when standard APIs are insufficient. citeturn10view0
+- Export customised tables in different formats; supports downloading multiple tables at once. citeturn10view0
 
 **Typical Datasets**
 - Labour force statistics
@@ -76,10 +79,12 @@ Authoritative national statistics source demonstrating Excel/CSV handling and sc
 - Time-series economic indicators
 
 **Formats**
-- CSV
-- Excel (`.xls`, `.xlsx`)
+- JSON / CSV (API) 
+- CSV / Excel (`.xls`, `.xlsx`) via table export
 
 **Handling Rules**
+- Prefer API responses (JSON/CSV) when available for reliability and repeatability. 
+- Fallback to exported CSV/Excel for tables without API coverage. citeturn10view0
 - Normalize multi-row headers
 - Canonicalize time columns (Year / Quarter / Month)
 - Preserve original column labels in metadata
