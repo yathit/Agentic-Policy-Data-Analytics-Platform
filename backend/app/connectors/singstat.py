@@ -1,22 +1,25 @@
 """
-DOS SingStat connector implementation.
-Handles CSV and Excel downloads with multi-row header normalization.
+DOS SingStat connector implementation using Table Builder Developer API.
+Enables on-demand discovery and retrieval of statistical tables.
 """
 
-import requests
-import pandas as pd
+import hashlib
 import io
-import time
+import json
 import logging
-from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
-from typing import List, Dict, Any, Optional
+import re
+import time
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
+import requests
 
 from app.connectors.base import (
     BaseConnector,
+    CleaningResult,
     DatasetCandidate,
     QualityReport,
-    CleaningResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,276 +27,643 @@ logger = logging.getLogger(__name__)
 
 class SingStatConnector(BaseConnector):
     """
-    Connector for Department of Statistics Singapore (SingStat).
+    Connector for Department of Statistics Singapore (SingStat) Table Builder API.
 
     Features:
-    - CSV and Excel file downloads
-    - Multi-row header normalization
-    - Time-series column canonicalization
-    - Metadata preservation
+    - Keyword-based discovery via Table Builder search API
+    - On-demand retrieval via Table Builder Data API
+    - JSON preferred with CSV fallback
+    - Tidy format normalization
+    - Idempotency via (resource_id, payload_checksum)
     """
 
-    BASE_URL = "https://tablebuilder.singstat.gov.sg"
+    BASE_URL = "https://tablebuilder.singstat.gov.sg/api/table"
+    SEARCH_URL = f"{BASE_URL}/resourceid"
+    DATA_URL = f"{BASE_URL}/tabledata"
+
     DEFAULT_HEADERS = {
         "User-Agent": "Mozilla/5.0 (compatible; IMDA-Policy-Analytics/1.0)",
-        "Accept": "text/csv,application/json;q=0.9,*/*;q=0.8",
-        "Referer": "https://tablebuilder.singstat.gov.sg/",
-        "Origin": "https://tablebuilder.singstat.gov.sg",
-    }
-
-    # Common SingStat datasets (can be expanded)
-    KNOWN_DATASETS = {
-        "labour_force": {
-            "name": "Labour Force Statistics",
-            "url": "https://tablebuilder.singstat.gov.sg/api/table/tabledata/M182011",
-            "format": "csv",
-            "description": "Labour force participation rates and employment statistics",
-        },
-        "employment_by_industry": {
-            "name": "Employment by Industry",
-            "url": "https://tablebuilder.singstat.gov.sg/api/table/tabledata/M182021",
-            "format": "csv",
-            "description": "Employment levels across different industries",
-        },
+        "Accept": "application/json, text/csv;q=0.9, */*;q=0.8",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """
+        Initialize SingStat connector.
+
+        Args:
+            config: Optional configuration with keys:
+                - max_retries: Number of retry attempts (default: 3)
+                - retry_delay: Base delay between retries in seconds (default: 1)
+                - max_results: Maximum discovery results to return (default: 20)
+                - prefer_time_series: Prefer TS tables in discovery (default: True)
+        """
         super().__init__(config)
-        self.max_retries = config.get("max_retries", 3) if config else 3
-        self.retry_delay = config.get("retry_delay", 1) if config else 1
+        self.max_retries = self.config.get("max_retries", 3)
+        self.retry_delay = self.config.get("retry_delay", 1)
+        self.max_results = self.config.get("max_results", 20)
+        self.prefer_time_series = self.config.get("prefer_time_series", True)
         self.session = requests.Session()
-        self.extra_headers = config.get("headers", {}) if config else {}
+        self.session.headers.update(self.DEFAULT_HEADERS)
 
     def discover(self, intent: str) -> List[DatasetCandidate]:
         """
-        Discover SingStat datasets based on intent.
+        Discover SingStat tables by keyword search.
 
-        Note: SingStat doesn't have a public search API, so we match against
-        a curated list of known datasets.
+        Uses the Table Builder search API to locate tables matching the intent.
+        Search scope includes table title, variable names, and descriptions.
 
         Args:
             intent: Search query or keywords
 
         Returns:
-            List of dataset candidates
+            List of dataset candidates matching the intent
+        """
+        try:
+            candidates = self._search_tables(intent)
+
+            if self.prefer_time_series:
+                candidates = self._prioritize_time_series(candidates)
+
+            return candidates[: self.max_results]
+
+        except Exception as e:
+            logger.error("Discovery failed for intent '%s': %s", intent, e)
+            return []
+
+    def _search_tables(self, keyword: str) -> List[DatasetCandidate]:
+        """
+        Search for tables using the Table Builder API.
+
+        Args:
+            keyword: Search keyword
+
+        Returns:
+            List of DatasetCandidate objects
         """
         candidates = []
-        intent_lower = intent.lower()
 
-        for key, info in self.KNOWN_DATASETS.items():
-            # Simple keyword matching
-            if any(
-                keyword in intent_lower
-                for keyword in [key, info["name"].lower()]
-                + info["description"].lower().split()
-            ):
+        try:
+            params = {"keyword": keyword}
+            response = self._make_request(self.SEARCH_URL, params=params)
+
+            if response is None:
+                return candidates
+
+            data = response.json()
+
+            records = data.get("Data", {}).get("records", [])
+            if not records:
+                records = data.get("records", [])
+
+            for record in records:
+                resource_id = record.get("id") or record.get("resourceId")
+                if not resource_id:
+                    continue
+
+                title = record.get("title", "")
+                description = record.get("description", "")
+                variables = record.get("variables", [])
+
+                if isinstance(variables, list):
+                    var_text = ", ".join(str(v) for v in variables[:5])
+                else:
+                    var_text = str(variables) if variables else ""
+
+                full_description = description
+                if var_text:
+                    full_description = f"{description} Variables: {var_text}"
+
+                data_type = record.get("type", "").upper()
+                is_time_series = data_type == "TS" or "time" in title.lower()
+
                 candidate = DatasetCandidate(
-                    name=info["name"],
-                    description=info["description"],
+                    name=title or f"Table {resource_id}",
+                    description=full_description.strip() or "SingStat statistical table",
                     source_type="singstat",
-                    format=info["format"],
-                    uri=info["url"],
+                    format="json",
+                    uri=resource_id,
                     metadata={
-                        "dataset_key": key,
+                        "resource_id": resource_id,
                         "agency": "Department of Statistics Singapore",
+                        "data_type": data_type,
+                        "is_time_series": is_time_series,
+                        "variables": variables if isinstance(variables, list) else [],
+                        "frequency": record.get("frequency", ""),
+                        "generated_on": record.get("generatedOn", ""),
                     },
                 )
                 candidates.append(candidate)
 
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse search response: %s", e)
+        except Exception as e:
+            logger.error("Search failed for keyword '%s': %s", keyword, e)
+
         return candidates
+
+    def _prioritize_time_series(
+        self, candidates: List[DatasetCandidate]
+    ) -> List[DatasetCandidate]:
+        """
+        Sort candidates to prioritize time series tables.
+
+        Args:
+            candidates: List of candidates to sort
+
+        Returns:
+            Sorted list with time series tables first
+        """
+        ts_candidates = []
+        other_candidates = []
+
+        for c in candidates:
+            if c.metadata.get("is_time_series"):
+                ts_candidates.append(c)
+            else:
+                other_candidates.append(c)
+
+        return ts_candidates + other_candidates
 
     def fetch(self, dataset_ref: str) -> bytes:
         """
-        Fetch dataset from SingStat.
+        Fetch table data from SingStat Table Builder API.
+
+        Prefers JSON format with CSV fallback.
 
         Args:
-            dataset_ref: URL to the dataset file
+            dataset_ref: Resource ID or full URL
 
         Returns:
-            Raw bytes of the dataset
+            Raw bytes of the table data
         """
-        try:
-            url = self._normalize_dataset_ref(dataset_ref)
-            headers = self._build_headers()
-            last_error: Optional[Exception] = None
+        resource_id = self._extract_resource_id(dataset_ref)
+        url = f"{self.DATA_URL}/{resource_id}"
 
-            for attempt in range(self.max_retries):
-                for candidate_url in self._candidate_urls(url):
-                    try:
-                        response = self.session.get(
-                            candidate_url,
-                            headers=headers,
-                            timeout=30,
-                        )
-                        response.raise_for_status()
-                        return response.content
-                    except requests.exceptions.HTTPError as e:
-                        last_error = e
-                        status = e.response.status_code if e.response else None
-                        response_text = ""
-                        if e.response is not None and e.response.text:
-                            response_text = e.response.text[:200]
-                        logger.warning(
-                            "SingStat request failed (status=%s) for %s. Body: %s",
-                            status,
-                            candidate_url,
-                            response_text,
-                        )
-                        # For 4xx (except 429), try next candidate URL without retrying.
-                        if status and 400 <= status < 500 and status != 429:
-                            continue
-                    except requests.exceptions.RequestException as e:
-                        last_error = e
-                        logger.warning(
-                            "SingStat request error for %s: %s",
-                            candidate_url,
-                            e,
-                        )
-                        continue
+        formats_to_try = [("json", "application/json"), ("csv", "text/csv")]
+
+        last_error: Optional[Exception] = None
+
+        for fmt, accept in formats_to_try:
+            try:
+                headers = {"Accept": accept}
+                response = self._make_request(url, headers=headers)
+
+                if response is not None:
+                    return response.content
+
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "Fetch failed for %s (format=%s): %s", resource_id, fmt, e
+                )
+
+        error_msg = f"Failed to fetch table {resource_id}"
+        if last_error:
+            error_msg = f"{error_msg}: {last_error}"
+
+        raise ValueError(error_msg)
+
+    def _make_request(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[requests.Response]:
+        """
+        Make HTTP request with retry logic.
+
+        Args:
+            url: Request URL
+            params: Query parameters
+            headers: Additional headers
+
+        Returns:
+            Response object or None on failure
+        """
+        request_headers = dict(self.session.headers)
+        if headers:
+            request_headers.update(headers)
+
+        for attempt in range(self.max_retries):
+            try:
+                response = self.session.get(
+                    url, params=params, headers=request_headers, timeout=30
+                )
+                response.raise_for_status()
+                return response
+
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response else None
+
+                if status == 429:
+                    delay = self.retry_delay * (2**attempt)
+                    logger.warning("Rate limited, waiting %ss...", delay)
+                    time.sleep(delay)
+                    continue
+
+                if status and 400 <= status < 500:
+                    logger.warning("Client error %s for %s", status, url)
+                    return None
 
                 if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2 ** attempt)
-                    logger.warning("SingStat download failed, retrying in %ss...", delay)
+                    delay = self.retry_delay * (2**attempt)
+                    logger.warning("Request failed, retrying in %ss...", delay)
                     time.sleep(delay)
                 else:
-                    if last_error:
-                        raise last_error
-                    raise ValueError("Unknown error while fetching SingStat dataset")
+                    raise
 
-        except Exception as e:
-            raise ValueError(f"Failed to fetch dataset from SingStat: {self._summarize_error(e)}")
+            except requests.exceptions.RequestException as e:
+                if attempt < self.max_retries - 1:
+                    delay = self.retry_delay * (2**attempt)
+                    logger.warning("Request error, retrying in %ss: %s", delay, e)
+                    time.sleep(delay)
+                else:
+                    raise
+
+        return None
+
+    def _extract_resource_id(self, dataset_ref: str) -> str:
+        """
+        Extract resource ID from various reference formats.
+
+        Args:
+            dataset_ref: Resource ID, URL, or table reference
+
+        Returns:
+            Normalized resource ID
+        """
+        if dataset_ref.startswith("http"):
+            match = re.search(r"/tabledata/([A-Z0-9]+)", dataset_ref, re.IGNORECASE)
+            if match:
+                return match.group(1)
+            match = re.search(r"resourceId=([A-Z0-9]+)", dataset_ref, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        return dataset_ref.strip()
 
     def parse(self, raw_bytes: bytes, format_hint: Optional[str] = None) -> pd.DataFrame:
         """
-        Parse raw bytes into DataFrame.
+        Parse raw bytes into tidy format DataFrame.
 
-        Handles both CSV and Excel formats with multi-row header normalization.
+        Normalizes data into one observation per row with:
+        - period: Time dimension
+        - value: Numeric measure
+        - Additional dimension columns
 
         Args:
-            raw_bytes: Raw dataset bytes
-            format_hint: Format hint ('csv', 'excel', 'xls', 'xlsx')
+            raw_bytes: Raw table data bytes
+            format_hint: Format hint ('json' or 'csv')
 
         Returns:
-            Parsed DataFrame
+            Parsed DataFrame in tidy format
         """
         try:
-            if format_hint in ["excel", "xls", "xlsx"]:
-                # Parse Excel file
-                df = pd.read_excel(io.BytesIO(raw_bytes), engine="openpyxl")
-            else:
-                # Default to CSV
-                df = pd.read_csv(io.BytesIO(raw_bytes))
+            content = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            content = raw_bytes.decode("latin-1")
 
-            # Normalize multi-row headers if present
-            df = self._normalize_headers(df)
+        if format_hint == "csv" or (
+            format_hint is None and not content.strip().startswith(("{", "["))
+        ):
+            return self._parse_csv(content)
 
+        return self._parse_json(content)
+
+    def _parse_json(self, content: str) -> pd.DataFrame:
+        """
+        Parse JSON response into tidy DataFrame.
+
+        Args:
+            content: JSON string
+
+        Returns:
+            Tidy DataFrame
+        """
+        data = json.loads(content)
+
+        records_data = data.get("Data", {})
+        if isinstance(records_data, dict):
+            rows = records_data.get("row", [])
+            if not rows:
+                rows = records_data.get("rows", [])
+        else:
+            rows = data.get("row", []) or data.get("rows", [])
+
+        if not rows:
+            if "records" in data:
+                rows = data["records"]
+            elif "Data" in data and isinstance(data["Data"], list):
+                rows = data["Data"]
+
+        if not rows:
+            raise ValueError("No data rows found in JSON response")
+
+        tidy_rows = []
+
+        for row in rows:
+            if isinstance(row, dict):
+                row_key = row.get("rowKey", row.get("key", ""))
+                columns = row.get("columns", [])
+
+                for col in columns:
+                    if isinstance(col, dict):
+                        tidy_row = self._extract_tidy_row(row_key, col)
+                        if tidy_row:
+                            tidy_rows.append(tidy_row)
+                    else:
+                        tidy_rows.append({"row_key": row_key, "value": col})
+
+                if not columns:
+                    value = row.get("value") or row.get("Value")
+                    period = row.get("period") or row.get("year") or row.get("date")
+                    if value is not None:
+                        tidy_rows.append(
+                            {
+                                "period": period,
+                                "value": value,
+                                **{
+                                    k: v
+                                    for k, v in row.items()
+                                    if k not in ("value", "Value", "period", "year", "date")
+                                },
+                            }
+                        )
+            elif isinstance(row, list):
+                if len(row) >= 2:
+                    tidy_rows.append({"period": row[0], "value": row[1]})
+
+        if not tidy_rows:
+            raise ValueError("Could not extract any data rows from JSON")
+
+        return pd.DataFrame(tidy_rows)
+
+    def _extract_tidy_row(
+        self, row_key: str, col_data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Extract a single tidy row from column data.
+
+        Args:
+            row_key: Row identifier (often contains dimension info)
+            col_data: Column data dictionary
+
+        Returns:
+            Tidy row dictionary or None
+        """
+        value = col_data.get("value") or col_data.get("Value")
+        if value is None:
+            return None
+
+        period = col_data.get("key") or col_data.get("period") or col_data.get("year")
+
+        row = {"period": period, "value": value}
+
+        if row_key:
+            row["dimension"] = row_key
+
+        for key in ["unit", "footnote", "status", "uom"]:
+            if key in col_data:
+                row[key] = col_data[key]
+
+        return row
+
+    def _parse_csv(self, content: str) -> pd.DataFrame:
+        """
+        Parse CSV content into tidy DataFrame.
+
+        Handles multi-row headers and footnotes common in SingStat CSV files.
+
+        Args:
+            content: CSV string
+
+        Returns:
+            Tidy DataFrame
+        """
+        df = pd.read_csv(io.StringIO(content))
+
+        df = self._handle_multirow_headers(df)
+
+        df = self._normalize_to_tidy(df)
+
+        return df
+
+    def _handle_multirow_headers(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Handle multi-row headers in SingStat files.
+
+        Args:
+            df: DataFrame with potential multi-row headers
+
+        Returns:
+            DataFrame with normalized headers
+        """
+        if len(df) < 3:
             return df
 
-        except Exception as e:
-            raise ValueError(f"Failed to parse SingStat dataset: {e}")
+        first_row_na_ratio = df.iloc[0].isna().sum() / len(df.columns)
 
-    def _build_headers(self) -> Dict[str, str]:
-        headers = dict(self.DEFAULT_HEADERS)
-        headers.update(self.extra_headers or {})
-        return headers
+        if first_row_na_ratio > 0.3:
+            try:
+                new_columns = []
+                for i, col in enumerate(df.columns):
+                    val1 = "" if pd.isna(df.iloc[0, i]) else str(df.iloc[0, i])
+                    val2 = "" if pd.isna(df.iloc[1, i]) else str(df.iloc[1, i])
 
-    def _normalize_dataset_ref(self, dataset_ref: str) -> str:
-        if dataset_ref.startswith("http://") or dataset_ref.startswith("https://"):
-            return dataset_ref
-        return f"{self.BASE_URL}/api/table/tabledata/{dataset_ref}"
+                    if val1 and val2:
+                        new_columns.append(f"{val1}_{val2}")
+                    elif val1:
+                        new_columns.append(val1)
+                    elif val2:
+                        new_columns.append(val2)
+                    else:
+                        new_columns.append(str(col))
 
-    def _candidate_urls(self, url: str) -> List[str]:
-        parsed = urlparse(url)
-        base_query = dict(parse_qsl(parsed.query))
-        candidates = [url]
+                df = df.iloc[2:].copy()
+                df.columns = new_columns
+                df = df.reset_index(drop=True)
+            except Exception as e:
+                logger.warning("Failed to normalize multi-row headers: %s", e)
 
-        if "format" not in base_query:
-            base_query_csv = dict(base_query)
-            base_query_csv["format"] = "csv"
-            candidates.append(
-                urlunparse(parsed._replace(query=urlencode(base_query_csv)))
-            )
+        return df
 
-        if "download" not in base_query:
-            base_query_dl = dict(base_query)
-            base_query_dl["download"] = "1"
-            candidates.append(
-                urlunparse(parsed._replace(query=urlencode(base_query_dl)))
-            )
+    def _normalize_to_tidy(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize DataFrame to tidy format if needed.
 
-        if "format" in base_query or "download" in base_query:
-            return candidates
+        Args:
+            df: DataFrame to normalize
 
-        base_query_csv_dl = dict(base_query)
-        base_query_csv_dl["format"] = "csv"
-        base_query_csv_dl["download"] = "1"
-        candidates.append(
-            urlunparse(parsed._replace(query=urlencode(base_query_csv_dl)))
-        )
+        Returns:
+            Tidy DataFrame
+        """
+        if "period" in df.columns and "value" in df.columns:
+            return df
 
-        return list(dict.fromkeys(candidates))
+        time_cols = self._identify_time_columns(df)
+        value_cols = self._identify_value_columns(df)
 
-    def _summarize_error(self, error: Exception) -> str:
-        if isinstance(error, requests.exceptions.HTTPError) and error.response is not None:
-            status = error.response.status_code
-            url = error.response.url
-            body = (error.response.text or "")[:200]
-            if body:
-                return f"HTTP {status} for {url} - {body}"
-            return f"HTTP {status} for {url}"
-        return str(error)
+        if not time_cols and not value_cols:
+            return df
+
+        if len(time_cols) == 1 and len(value_cols) >= 1:
+            return df
+
+        numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        if len(numeric_cols) > 2:
+            id_cols = [c for c in df.columns if c not in numeric_cols]
+            if id_cols:
+                try:
+                    melted = pd.melt(
+                        df,
+                        id_vars=id_cols,
+                        value_vars=numeric_cols,
+                        var_name="period",
+                        value_name="value",
+                    )
+                    return melted
+                except Exception as e:
+                    logger.warning("Failed to melt DataFrame: %s", e)
+
+        return df
+
+    def _identify_time_columns(self, df: pd.DataFrame) -> List[str]:
+        """
+        Identify columns that represent time/period.
+
+        Args:
+            df: DataFrame to analyze
+
+        Returns:
+            List of time column names
+        """
+        time_keywords = ["year", "quarter", "month", "date", "period", "time"]
+        time_cols = []
+
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if any(kw in col_lower for kw in time_keywords):
+                time_cols.append(col)
+
+        return time_cols
+
+    def _identify_value_columns(self, df: pd.DataFrame) -> List[str]:
+        """
+        Identify columns that represent numeric values.
+
+        Args:
+            df: DataFrame to analyze
+
+        Returns:
+            List of value column names
+        """
+        value_keywords = ["value", "amount", "count", "total", "rate", "number"]
+        value_cols = []
+
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if any(kw in col_lower for kw in value_keywords):
+                value_cols.append(col)
+
+        return value_cols
 
     def validate(self, df: pd.DataFrame) -> QualityReport:
         """
-        Validate SingStat dataset quality.
+        Validate SingStat dataset against quality rules.
+
+        Validation checks:
+        - Non-empty dataset
+        - Presence of numeric measure column
+        - Parseable time/period column
+        - Missing value percentage
+        - Duplicate row detection
+        - Time-series continuity
 
         Args:
             df: DataFrame to validate
 
         Returns:
-            Quality report
+            Quality report with validation results
         """
         issues = []
         warnings = []
 
-        # Check for empty dataframe
         if df.empty:
-            issues.append({"type": "empty_dataset", "message": "DataFrame is empty"})
+            issues.append({"type": "empty_dataset", "message": "Dataset is empty"})
+            return QualityReport(
+                status="failed",
+                issues=issues,
+                warnings=warnings,
+                completeness_score=0.0,
+                missing_value_percentage=100.0,
+                duplicate_row_count=0,
+                time_series_gaps=None,
+                full_report={"total_rows": 0, "total_columns": 0},
+            )
 
-        # Check for duplicate rows
-        duplicate_count = df.duplicated().sum()
-        if duplicate_count > 0:
-            warnings.append({
-                "type": "duplicate_rows",
-                "message": f"Found {duplicate_count} duplicate rows",
-                "count": int(duplicate_count)
-            })
+        numeric_cols = df.select_dtypes(include=["number"]).columns
+        if len(numeric_cols) == 0:
+            potential_numeric = self._find_coercible_numeric_columns(df)
+            if not potential_numeric:
+                issues.append(
+                    {
+                        "type": "no_numeric_column",
+                        "message": "No numeric measure column found",
+                    }
+                )
 
-        # Check for missing values
+        time_cols = self._identify_time_columns(df)
+        if not time_cols:
+            warnings.append(
+                {
+                    "type": "no_time_column",
+                    "message": "No parseable time/period column found",
+                }
+            )
+
         total_cells = df.shape[0] * df.shape[1]
         missing_cells = df.isna().sum().sum()
-        missing_percentage = (missing_cells / total_cells * 100) if total_cells > 0 else 0
+        missing_pct = (missing_cells / total_cells * 100) if total_cells > 0 else 0
 
-        if missing_percentage > 50:
-            issues.append({
-                "type": "high_missing_values",
-                "message": f"Missing values exceed 50% ({missing_percentage:.2f}%)",
-                "percentage": missing_percentage
-            })
-        elif missing_percentage > 10:
-            warnings.append({
-                "type": "moderate_missing_values",
-                "message": f"Missing values: {missing_percentage:.2f}%",
-                "percentage": missing_percentage
-            })
+        if missing_pct > 50:
+            issues.append(
+                {
+                    "type": "high_missing_values",
+                    "message": f"Missing values exceed 50% ({missing_pct:.2f}%)",
+                    "percentage": missing_pct,
+                }
+            )
+        elif missing_pct > 10:
+            warnings.append(
+                {
+                    "type": "moderate_missing_values",
+                    "message": f"Missing values: {missing_pct:.2f}%",
+                    "percentage": missing_pct,
+                }
+            )
 
-        # Check for time series continuity (if applicable)
+        duplicate_count = df.duplicated().sum()
+        if duplicate_count > 0:
+            warnings.append(
+                {
+                    "type": "duplicate_rows",
+                    "message": f"Found {duplicate_count} duplicate rows",
+                    "count": int(duplicate_count),
+                }
+            )
+
         time_series_gaps = self._detect_time_gaps(df)
+        if time_series_gaps:
+            warnings.append(
+                {
+                    "type": "time_series_gaps",
+                    "message": "Gaps detected in time series",
+                    "gaps": time_series_gaps,
+                }
+            )
 
-        # Calculate completeness score
-        completeness_score = 1.0 - (missing_percentage / 100)
+        completeness_score = 1.0 - (missing_pct / 100)
 
-        # Determine overall status
         status = "passed"
         if issues:
             status = "failed"
@@ -305,7 +675,7 @@ class SingStatConnector(BaseConnector):
             issues=issues,
             warnings=warnings,
             completeness_score=completeness_score,
-            missing_value_percentage=missing_percentage,
+            missing_value_percentage=missing_pct,
             duplicate_row_count=int(duplicate_count),
             time_series_gaps=time_series_gaps,
             full_report={
@@ -313,183 +683,32 @@ class SingStatConnector(BaseConnector):
                 "total_columns": len(df.columns),
                 "columns": list(df.columns),
                 "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "numeric_columns": list(numeric_cols),
+                "time_columns": time_cols,
             },
         )
 
-    def clean(self, df: pd.DataFrame) -> CleaningResult:
+    def _find_coercible_numeric_columns(self, df: pd.DataFrame) -> List[str]:
         """
-        Clean and normalize SingStat dataset.
-
-        Special handling for:
-        - Multi-row headers
-        - Time columns (Year, Quarter, Month)
-        - Numeric formatting
+        Find columns that can be coerced to numeric.
 
         Args:
-            df: DataFrame to clean
+            df: DataFrame to analyze
 
         Returns:
-            Cleaned DataFrame and logs
+            List of column names that can be numeric
         """
-        cleaning_logs = []
-        cleaned_df = df.copy()
-
-        # 1. Normalize column names
-        original_columns = list(cleaned_df.columns)
-        cleaned_df = self.normalize_column_names(cleaned_df)
-        new_columns = list(cleaned_df.columns)
-
-        if original_columns != new_columns:
-            cleaning_logs.append({
-                "operation": "normalize_columns",
-                "description": "Normalized column names to snake_case",
-                "parameters": {},
-                "columns_affected": original_columns,
-                "sample_before": {"columns": original_columns},
-                "sample_after": {"columns": new_columns},
-            })
-
-        # 2. Canonicalize time columns
-        time_cols_renamed = self._canonicalize_time_columns(cleaned_df)
-        if time_cols_renamed:
-            cleaning_logs.append({
-                "operation": "canonicalize_time_columns",
-                "description": "Standardized time column names",
-                "parameters": {"mappings": time_cols_renamed},
-                "columns_affected": list(time_cols_renamed.keys()),
-            })
-
-        # 3. Convert numeric strings to numbers
-        for col in cleaned_df.columns:
-            if cleaned_df[col].dtype == "object":
-                try:
-                    # Remove common formatting (commas, spaces)
-                    cleaned_col = cleaned_df[col].astype(str).str.replace(",", "").str.replace(" ", "")
-                    numeric_col = pd.to_numeric(cleaned_col, errors="coerce")
-
-                    if numeric_col.notna().sum() > 0:
-                        original_dtype = str(cleaned_df[col].dtype)
-                        cleaned_df[col] = numeric_col
-                        cleaning_logs.append({
-                            "operation": "convert_numeric",
-                            "description": f"Converted column '{col}' from {original_dtype} to numeric",
-                            "parameters": {"column": col},
-                            "columns_affected": [col],
-                        })
-                except:
-                    pass
-
-        # 4. Parse date columns
-        for col in cleaned_df.columns:
-            if any(keyword in col.lower() for keyword in ["date", "period"]):
-                try:
-                    parsed_dates = pd.to_datetime(cleaned_df[col], errors="coerce")
-                    if parsed_dates.notna().sum() > 0:
-                        cleaned_df[col] = parsed_dates
-                        cleaning_logs.append({
-                            "operation": "parse_dates",
-                            "description": f"Parsed column '{col}' as datetime",
-                            "parameters": {"column": col},
-                            "columns_affected": [col],
-                        })
-                except:
-                    pass
-
-        # 5. Remove completely empty rows and columns
-        initial_rows = len(cleaned_df)
-        cleaned_df = cleaned_df.dropna(how="all")
-        rows_removed = initial_rows - len(cleaned_df)
-
-        if rows_removed > 0:
-            cleaning_logs.append({
-                "operation": "remove_empty_rows",
-                "description": f"Removed {rows_removed} completely empty rows",
-                "parameters": {},
-                "rows_affected": rows_removed,
-            })
-
-        empty_cols = [col for col in cleaned_df.columns if cleaned_df[col].isna().all()]
-        if empty_cols:
-            cleaned_df = cleaned_df.drop(columns=empty_cols)
-            cleaning_logs.append({
-                "operation": "remove_empty_columns",
-                "description": f"Removed {len(empty_cols)} completely empty columns",
-                "parameters": {},
-                "columns_affected": empty_cols,
-            })
-
-        return CleaningResult(
-            cleaned_df=cleaned_df,
-            cleaning_logs=cleaning_logs,
-        )
-
-    def _normalize_headers(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Normalize multi-row headers commonly found in SingStat files.
-
-        Args:
-            df: DataFrame with potential multi-row headers
-
-        Returns:
-            DataFrame with normalized single-row headers
-        """
-        # Check if first few rows might be headers
-        # (common pattern: first row has category, second row has subcategory)
-        if len(df) > 2:
-            # If first row has many NaN values, it might be a multi-row header
-            first_row_na_count = df.iloc[0].isna().sum()
-            if first_row_na_count > len(df.columns) * 0.3:
-                # Attempt to combine first two rows as headers
-                try:
-                    new_columns = []
-                    for i, col in enumerate(df.columns):
-                        val1 = str(df.iloc[0, i]) if not pd.isna(df.iloc[0, i]) else ""
-                        val2 = str(df.iloc[1, i]) if not pd.isna(df.iloc[1, i]) else ""
-                        if val1 and val2:
-                            new_columns.append(f"{val1}_{val2}")
-                        elif val1:
-                            new_columns.append(val1)
-                        elif val2:
-                            new_columns.append(val2)
-                        else:
-                            new_columns.append(col)
-
-                    df = df.iloc[2:].copy()
-                    df.columns = new_columns
-                    df = df.reset_index(drop=True)
-                except:
-                    pass
-
-        return df
-
-    def _canonicalize_time_columns(self, df: pd.DataFrame) -> Dict[str, str]:
-        """
-        Standardize time column names (Year, Quarter, Month).
-
-        Args:
-            df: DataFrame to process
-
-        Returns:
-            Dictionary of {old_name: new_name} mappings
-        """
-        renames = {}
-        time_keywords = {
-            "year": ["year", "yr", "yyyy"],
-            "quarter": ["quarter", "qtr", "q"],
-            "month": ["month", "mon", "mm"],
-            "date": ["date", "period"],
-        }
-
+        coercible = []
         for col in df.columns:
-            col_lower = col.lower()
-            for standard_name, keywords in time_keywords.items():
-                if any(keyword in col_lower for keyword in keywords):
-                    if col != standard_name:
-                        renames[col] = standard_name
-                        df.rename(columns={col: standard_name}, inplace=True)
-                    break
-
-        return renames
+            if df[col].dtype == "object":
+                try:
+                    cleaned = df[col].astype(str).str.replace(",", "").str.strip()
+                    numeric = pd.to_numeric(cleaned, errors="coerce")
+                    if numeric.notna().sum() > len(df) * 0.5:
+                        coercible.append(col)
+                except Exception:
+                    pass
+        return coercible
 
     def _detect_time_gaps(self, df: pd.DataFrame) -> Optional[List[Dict[str, Any]]]:
         """
@@ -501,58 +720,311 @@ class SingStatConnector(BaseConnector):
         Returns:
             List of detected gaps or None
         """
-        # Look for date/time columns
-        time_cols = [
-            col for col in df.columns
-            if any(keyword in col.lower() for keyword in ["date", "year", "quarter", "month", "period"])
-        ]
-
+        time_cols = self._identify_time_columns(df)
         if not time_cols:
             return None
 
         gaps = []
         for col in time_cols:
             try:
-                # Try to parse as datetime
                 dates = pd.to_datetime(df[col], errors="coerce")
                 dates = dates.dropna().sort_values()
 
                 if len(dates) > 1:
-                    # Check for gaps larger than expected frequency
                     diffs = dates.diff()[1:]
                     median_diff = diffs.median()
 
-                    large_gaps = diffs[diffs > median_diff * 2]
-                    if len(large_gaps) > 0:
-                        gaps.append({
-                            "column": col,
-                            "gap_count": len(large_gaps),
-                            "median_interval": str(median_diff),
-                        })
-            except:
+                    if pd.notna(median_diff):
+                        large_gaps = diffs[diffs > median_diff * 2]
+                        if len(large_gaps) > 0:
+                            gaps.append(
+                                {
+                                    "column": col,
+                                    "gap_count": len(large_gaps),
+                                    "median_interval": str(median_diff),
+                                }
+                            )
+            except Exception:
                 pass
 
         return gaps if gaps else None
 
-    def get_provenance_info(self, dataset_ref: str, df: pd.DataFrame) -> Dict[str, Any]:
+    def clean(self, df: pd.DataFrame) -> CleaningResult:
         """
-        Generate provenance information for SingStat dataset.
+        Clean and normalize SingStat dataset.
+
+        Cleaning operations:
+        - Normalize column names to snake_case
+        - Coerce numeric values
+        - Standardize period representations
+        - Trim whitespace and normalize categoricals
+        - Drop fully empty rows/columns
+
+        All operations are logged for auditability.
 
         Args:
-            dataset_ref: Dataset URL
+            df: DataFrame to clean
+
+        Returns:
+            CleaningResult with cleaned DataFrame and logs
+        """
+        cleaning_logs = []
+        cleaned_df = df.copy()
+
+        original_columns = list(cleaned_df.columns)
+        cleaned_df = self.normalize_column_names(cleaned_df)
+        new_columns = list(cleaned_df.columns)
+
+        if original_columns != new_columns:
+            cleaning_logs.append(
+                {
+                    "operation": "normalize_columns",
+                    "description": "Normalized column names to snake_case",
+                    "columns_affected": original_columns,
+                    "mapping": dict(zip(original_columns, new_columns)),
+                }
+            )
+
+        time_renames = self._standardize_time_columns(cleaned_df)
+        if time_renames:
+            cleaning_logs.append(
+                {
+                    "operation": "standardize_time_columns",
+                    "description": "Standardized time column names",
+                    "mapping": time_renames,
+                }
+            )
+
+        for col in cleaned_df.columns:
+            if cleaned_df[col].dtype == "object":
+                original_values = cleaned_df[col].copy()
+
+                cleaned_col = (
+                    cleaned_df[col]
+                    .astype(str)
+                    .str.replace(",", "", regex=False)
+                    .str.replace(" ", "", regex=False)
+                    .str.strip()
+                )
+
+                numeric_col = pd.to_numeric(cleaned_col, errors="coerce")
+                non_null_numeric = numeric_col.notna().sum()
+                non_null_original = cleaned_df[col].notna().sum()
+
+                if non_null_numeric > 0 and non_null_numeric >= non_null_original * 0.5:
+                    cleaned_df[col] = numeric_col
+                    cleaning_logs.append(
+                        {
+                            "operation": "coerce_numeric",
+                            "description": f"Converted '{col}' to numeric",
+                            "column": col,
+                            "values_converted": int(non_null_numeric),
+                        }
+                    )
+
+        for col in cleaned_df.columns:
+            if cleaned_df[col].dtype == "object":
+                original_values = cleaned_df[col].copy()
+                cleaned_df[col] = cleaned_df[col].astype(str).str.strip()
+
+                if not original_values.equals(cleaned_df[col]):
+                    cleaning_logs.append(
+                        {
+                            "operation": "trim_whitespace",
+                            "description": f"Trimmed whitespace in '{col}'",
+                            "column": col,
+                        }
+                    )
+
+        for col in cleaned_df.columns:
+            if any(kw in col for kw in ["period", "year", "quarter", "month"]):
+                standardized = self._standardize_period_values(cleaned_df[col])
+                if standardized is not None:
+                    cleaned_df[col] = standardized
+                    cleaning_logs.append(
+                        {
+                            "operation": "standardize_period",
+                            "description": f"Standardized period values in '{col}'",
+                            "column": col,
+                        }
+                    )
+
+        initial_rows = len(cleaned_df)
+        cleaned_df = cleaned_df.dropna(how="all")
+        rows_removed = initial_rows - len(cleaned_df)
+
+        if rows_removed > 0:
+            cleaning_logs.append(
+                {
+                    "operation": "remove_empty_rows",
+                    "description": f"Removed {rows_removed} empty rows",
+                    "rows_removed": rows_removed,
+                }
+            )
+
+        empty_cols = [col for col in cleaned_df.columns if cleaned_df[col].isna().all()]
+        if empty_cols:
+            cleaned_df = cleaned_df.drop(columns=empty_cols)
+            cleaning_logs.append(
+                {
+                    "operation": "remove_empty_columns",
+                    "description": f"Removed {len(empty_cols)} empty columns",
+                    "columns_removed": empty_cols,
+                }
+            )
+
+        return CleaningResult(cleaned_df=cleaned_df, cleaning_logs=cleaning_logs)
+
+    def _standardize_time_columns(self, df: pd.DataFrame) -> Dict[str, str]:
+        """
+        Standardize time column names.
+
+        Args:
+            df: DataFrame to modify in place
+
+        Returns:
+            Dictionary of {old_name: new_name} mappings
+        """
+        renames = {}
+        time_mappings = {
+            "period": ["period", "time_period", "ref_period"],
+            "year": ["year", "yr", "yyyy", "annual"],
+            "quarter": ["quarter", "qtr", "q"],
+            "month": ["month", "mon", "mm", "mth"],
+        }
+
+        for col in list(df.columns):
+            col_lower = col.lower()
+            for standard_name, keywords in time_mappings.items():
+                if any(kw == col_lower or col_lower.endswith(f"_{kw}") for kw in keywords):
+                    if col != standard_name and standard_name not in df.columns:
+                        df.rename(columns={col: standard_name}, inplace=True)
+                        renames[col] = standard_name
+                    break
+
+        return renames
+
+    def _standardize_period_values(self, series: pd.Series) -> Optional[pd.Series]:
+        """
+        Standardize period value formats.
+
+        Handles Year, Quarter (YYYY-Q#), Month (YYYY-MM) formats.
+
+        Args:
+            series: Series with period values
+
+        Returns:
+            Standardized series or None if no changes needed
+        """
+        try:
+            sample = series.dropna().head(10).astype(str)
+            if len(sample) == 0:
+                return None
+
+            quarter_pattern = re.compile(r"(\d{4})\s*[Qq](\d)")
+            month_pattern = re.compile(r"(\d{4})\s*[Mm](\d{1,2})")
+
+            standardized = series.astype(str)
+            changed = False
+
+            if sample.str.match(quarter_pattern).any():
+                standardized = standardized.str.replace(
+                    quarter_pattern, r"\1-Q\2", regex=True
+                )
+                changed = True
+
+            if sample.str.match(month_pattern).any():
+                standardized = standardized.apply(
+                    lambda x: month_pattern.sub(
+                        lambda m: f"{m.group(1)}-{int(m.group(2)):02d}", str(x)
+                    )
+                )
+                changed = True
+
+            return standardized if changed else None
+
+        except Exception:
+            return None
+
+    def get_provenance_info(self, dataset_ref: str, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Generate complete provenance information for SingStat dataset.
+
+        Args:
+            dataset_ref: Dataset reference (resource ID or URL)
             df: The DataFrame
 
         Returns:
-            Provenance metadata
+            Provenance metadata dictionary
         """
+        resource_id = self._extract_resource_id(dataset_ref)
+
         return {
+            "source": "singstat",
             "source_name": "Department of Statistics Singapore (SingStat)",
-            "source_uri": dataset_ref,
-            "retrieved_at": datetime.utcnow(),
-            "retrieval_method": "download",
+            "resource_id": resource_id,
+            "source_uri": f"{self.DATA_URL}/{resource_id}",
+            "retrieved_at": datetime.utcnow().isoformat(),
+            "retrieval_method": "Table Builder Developer API",
             "row_count": len(df),
             "column_count": len(df.columns),
+            "columns": list(df.columns),
             "data_owner": "Singapore Department of Statistics",
             "license_info": "Singapore Open Data License",
-            "update_frequency": "varies",  # SingStat datasets have different update frequencies
+            "api_version": "v1",
         }
+
+    def compute_checksum(self, raw_bytes: bytes) -> str:
+        """
+        Compute checksum for raw payload.
+
+        Used for idempotency checks.
+
+        Args:
+            raw_bytes: Raw data bytes
+
+        Returns:
+            SHA-256 checksum string
+        """
+        return hashlib.sha256(raw_bytes).hexdigest()
+
+    def get_idempotency_key(self, resource_id: str, raw_bytes: bytes) -> Tuple[str, str]:
+        """
+        Generate idempotency key for dataset.
+
+        Args:
+            resource_id: SingStat resource ID
+            raw_bytes: Raw data bytes
+
+        Returns:
+            Tuple of (resource_id, checksum)
+        """
+        checksum = self.compute_checksum(raw_bytes)
+        return (resource_id, checksum)
+
+    def get_schema_snapshot(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Generate detailed schema snapshot.
+
+        Args:
+            df: DataFrame to analyze
+
+        Returns:
+            Schema information dictionary
+        """
+        schema = {
+            "columns": list(df.columns),
+            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "nullable": {col: bool(df[col].isna().any()) for col in df.columns},
+            "unique_counts": {col: int(df[col].nunique()) for col in df.columns},
+            "sample_values": {},
+        }
+
+        for col in df.columns:
+            non_null = df[col].dropna()
+            if len(non_null) > 0:
+                schema["sample_values"][col] = [
+                    str(v) for v in non_null.head(3).tolist()
+                ]
+
+        return schema
