@@ -18,6 +18,14 @@ class CollectionRow(TypedDict):
     payload: dict
 
 
+class CollectionSearchRow(TypedDict):
+    collection_id: str
+    lastUpdatedAt: datetime
+    name: str | None
+    description: str | None
+    child_dataset_ids: list[str]
+
+
 def insert_many_ignore_conflicts(db: Session, rows: list[CollectionRow]) -> int:
     """
     Insert collection rows, ignoring conflicts on (collection_id, lastUpdatedAt).
@@ -55,3 +63,39 @@ def insert_many_ignore_conflicts(db: Session, rows: list[CollectionRow]) -> int:
 
     db.commit()
     return inserted
+
+
+def search_collections(
+    db: Session,
+    keyword: str | None,
+    limit: int = 50,
+) -> list[CollectionSearchRow]:
+    """
+    Search latest collections by keyword using the DB search function.
+
+    Args:
+        db: SQLAlchemy session
+        keyword: Search keyword (can be empty)
+        limit: Max number of collections to return
+
+    Returns:
+        List of collection rows from the latest view
+    """
+    sql = text("""
+        SELECT collection_id, name, description, child_dataset_ids, lastupdatedat
+        FROM data_gov_sg_collection_search(:keyword, :lim)
+    """)
+
+    result = db.execute(sql, {"keyword": keyword or "", "lim": limit})
+    rows = result.mappings().all()
+
+    return [
+        {
+            "collection_id": row["collection_id"],
+            "name": row["name"],
+            "description": row["description"],
+            "child_dataset_ids": row["child_dataset_ids"] or [],
+            "lastUpdatedAt": row["lastupdatedat"],
+        }
+        for row in rows
+    ]

@@ -10,7 +10,8 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.connectors.base import BaseConnector, QualityReport, CleaningResult
-from app.connectors import DataGovConnector, SingStatConnector, InternalConnector
+from app.connectors import DataGovV2Connector, SingStatConnector, InternalConnector
+from app.db.repo_data_gov_sg_collection import search_collections
 from app.models.dataset import Dataset, DatasetProvenance, ValidationReport, CleaningLog
 
 
@@ -35,7 +36,7 @@ class DataService:
         """
         self.db = db
         self.connectors: Dict[str, BaseConnector] = {
-            "data.gov.sg": DataGovConnector(),
+            "data.gov.sg": DataGovV2Connector(),
             "singstat": SingStatConnector(),
             "internal": InternalConnector(),
         }
@@ -57,6 +58,45 @@ class DataService:
         all_candidates = []
 
         for source_type in sources:
+            if source_type == "data.gov.sg":
+                try:
+                    collections = search_collections(self.db, intent, limit=10)
+                except Exception as e:
+                    print(f"Error searching data.gov.sg cache: {e}")
+                    collections = []
+
+                if collections:
+                    seen_dataset_ids: set[str] = set()
+                    max_datasets = 10
+                    for collection in collections:
+                        child_ids = collection.get("child_dataset_ids") or []
+                        for dataset_id in child_ids[:2]:
+                            if dataset_id in seen_dataset_ids:
+                                continue
+                            seen_dataset_ids.add(dataset_id)
+                            all_candidates.append({
+                                "name": collection.get("name") or dataset_id,
+                                "description": collection.get("description") or "",
+                                "source_type": "data.gov.sg",
+                                "format": "api",
+                                "uri": dataset_id,
+                                "metadata": {
+                                    "collection_id": collection.get("collection_id"),
+                                    "collection_name": collection.get("name"),
+                                    "last_updated_at": (
+                                        collection.get("lastUpdatedAt").isoformat()
+                                        if collection.get("lastUpdatedAt")
+                                        else None
+                                    ),
+                                },
+                            })
+                            if len(seen_dataset_ids) >= max_datasets:
+                                break
+                        if len(seen_dataset_ids) >= max_datasets:
+                            break
+
+                    continue
+
             connector = self.connectors.get(source_type)
             if connector:
                 try:

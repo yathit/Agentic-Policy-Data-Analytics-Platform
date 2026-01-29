@@ -31,34 +31,66 @@ This task focuses on **data acquisition and validation only**. No analytics or U
 **Purpose**
 Primary open-data source for structured datasets suitable for demos and automated extraction.
 
-**Access Pattern**
-- Dataset listing API (exact endpoint):
-  - `https://data.gov.sg/v1/public/api/datasets`
-
-
 **Typical Datasets**
 - Employment by industry
 - Workforce demographics
 - Sectoral output indicators
 
-**Hardcoded datasetId (required for bootstrapping)**
-Use these as fixed dataset seeds when discovery is not yet wired:
-- `d_bccdf7ae697389c5a7e8c3f9005a852a` - Principal Statistics Of Manufacturing By Industry Cluster - Employment, Annual
-- `d_623c5a2823d6ccd02c331719135108f9` - Resident Employees Aged 15 Years and Over by Industry, Nature of Employment and Sex (General Household Survey 2005)
-- `d_a326c13e94827819f8f1057c15f00221` - Changes In Employment By Sector, (Compared To The Previous Period), Annual
-- `d_31dec7667bc2c6b945a262cd60958eaf` - Changes In Employment By Sector, (Compared To The Previous Period), Quarterly
-- `d_c2b4d1a2c9bfc5d0df58dd339d8121a0` - Total Mobile Phone Subscriptions
-- `d_fcc02bc884c54a09e8665443bff2f4c2` - Individual Internet Usage
-- `d_5105c8c24199312306d1dd38bbc560a8` - Total Foreign Workforce
-
 **Formats**
 - JSON (API)
 - CSV
 
-**Handling Rules**
-- Prefer API endpoints when available
-- Fallback to CSV download if API fails
-- Retry with exponential backoff on transient errors
+#### Architecture
+
+**Two-phase approach:**
+1. **Discovery** — Query cached `data_gov_sg_collection` table (not API)
+2. **Fetching** — Use V2 API to retrieve actual dataset data
+
+**Connector:** `DataGovV2Connector` (new, replaces legacy CKAN connector)
+
+#### V2 API Endpoints
+
+| Endpoint | URL | Purpose |
+|----------|-----|---------|
+| Metadata | `GET /v2/public/api/datasets/{id}/metadata` | Schema info |
+| List Rows | `GET /v2/public/api/datasets/{id}/list-rows` | Paginated data |
+| Initiate Download | `GET /v1/public/api/datasets/{id}/initiate-download` | Async download |
+| Poll Download | `GET /v1/public/api/datasets/{id}/poll-download` | Get download URL |
+
+Base URLs:
+- `https://api-production.data.gov.sg` (v2)
+- `https://api-open.data.gov.sg` (v1 download)
+
+#### Discovery Flow
+
+1. User provides intent (e.g., "employment statistics")
+2. `DataService.discover_datasets()` calls `search_collections(db, intent)`
+3. Returns dataset candidates with `uri` = dataset_id (e.g., `d_abc123`)
+4. Each candidate includes collection metadata (name, description, last_updated)
+
+#### Data Fetching Flow
+
+1. `DataService.ingest_dataset()` receives selected dataset_id
+2. `DataGovV2Connector.fetch(dataset_id)` tries:
+   - **Primary:** `list-rows` API (paginated, for smaller datasets)
+   - **Fallback:** `initiate-download` → `poll-download` (async, for large datasets)
+3. Parse response to DataFrame (CSV/JSON)
+4. Validate and clean per standard pipeline
+
+#### Files
+
+| File | Purpose |
+|------|---------|
+| `connectors/datagov_v2.py` | V2 connector implementation |
+| `connectors/__init__.py` | Export new connector |
+| `services/data_service.py` | Register V2 connector for `data.gov.sg` |
+
+#### Handling Rules
+
+- Retry with exponential backoff on 429, 5xx errors (base delay: 2s)
+- Max 3 retries per request
+- Poll download status up to 10 times (2s intervals)
+- Hard-fail on invalid response shape
 
 ---
 
