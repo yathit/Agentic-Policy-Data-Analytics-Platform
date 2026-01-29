@@ -54,7 +54,11 @@ class CoordinatorAgent:
         if prompt_path.exists():
             return prompt_path.read_text()
         else:
-            return "You are a Coordinator Agent for policy data analytics."
+            raise FileNotFoundError(
+                f"Coordinator prompt file not found at '{prompt_path}'. "
+                f"This file is required to define the agent's behavior and capabilities. "
+                f"Please create the prompt file at '.llm/prompts/coordinator.md'."
+            )
 
     def _emit_event(
         self, run_id: str, phase: EventPhase, message: str, payload: Dict[str, Any] = None
