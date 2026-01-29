@@ -23,7 +23,7 @@ Date: 2026-01-29
 
 ## Proposed Design
 
-### 1) Weekly Schedule (Option B)
+### 1) Weekly Schedule  
 - Add a Celery Beat schedule that calls a new task wrapper for
   `run_data_gov_sg_collections_ingest()`.
 - Default schedule: weekly, configurable via environment variables.
@@ -38,17 +38,11 @@ Date: 2026-01-29
 ### 3) Readiness & Concurrency
 - Readiness: ensure DB connectivity and migrations/DDL applied before the
   startup check runs.
-- Use a distributed lock to prevent duplicate concurrent ingests:
-  - Option A: Postgres advisory lock (preferred).
-  - Option B: Insert into a `data_gov_sg_collection_ingest_runs` table with a
-    unique “in_progress” sentinel row.
+- Use a Postgres advisory lock to prevent duplicate concurrent ingests:
 - Both weekly and startup paths should respect the same lock.
 
 ### 4) Observability
-- Log start/end of ingest with counts returned by `IngestResult`.
-- Persist last successful run timestamp and summary stats (rows inserted,
-  pages fetched, errors count) in a small metadata table or existing events
-  table, to support later audits and UI surfacing.
+- Skip for now
 
 ### 5) Configuration
 - `DATA_GOV_SG_INGEST_WEEKLY_CRON` (e.g., `0 2 * * 0`)
@@ -63,16 +57,4 @@ Date: 2026-01-29
    - Waits for DB ready
    - Checks if `data_gov_sg_collection` is empty
    - Enqueues the task if empty
-4. Add concurrency lock around the task (advisory lock or table sentinel).
-5. Add minimal persistence of run metadata (optional but recommended).
 
-## Open Decisions
-- Exact weekly schedule and timezone.
-- Locking mechanism preference (advisory lock vs. sentinel table).
-- Where to store ingest run metadata (new table vs. existing event logs).
-
-## Acceptance Criteria
-- Weekly ingest task is scheduled and runs without manual intervention.
-- On clean startup with empty table, ingest is queued exactly once.
-- Multiple backend instances do not trigger duplicate ingests.
-- Logs/metadata show last run status and counts.
