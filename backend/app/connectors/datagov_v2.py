@@ -2,7 +2,7 @@
 Data.gov.sg V2 API connector implementation.
 
 Uses cached collections for discovery and V2 API for data fetching.
-Supports list-rows API for smaller datasets and async download for larger ones.
+Uses list-rows API for paginated data access.
 """
 
 import requests
@@ -33,14 +33,12 @@ class DataGovV2Connector(BaseConnector):
 
     Features:
     - list-rows API for paginated data access
-    - Async download API for large datasets
     - Exponential backoff retry logic
     - Rate limiting compliance (5 req/min without API key)
     """
 
     # V2 API endpoints
     API_BASE_V2 = "https://api-production.data.gov.sg/v2/public/api"
-    API_BASE_OPEN = "https://api-open.data.gov.sg/v1/public/api"
 
     # Retryable HTTP status codes
     RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -51,6 +49,8 @@ class DataGovV2Connector(BaseConnector):
         self.base_delay = config.get("base_delay", 2.0) if config else 2.0
         self.request_timeout = config.get("request_timeout", 30) if config else 30
         self.max_rows = config.get("max_rows", 100000) if config else 100000
+        # Keep integration/demo runs fast; override via config if needed.
+        self.max_pages = config.get("max_pages", 2) if config else 2
 
     def discover(self, intent: str) -> List[DatasetCandidate]:
         """
@@ -72,8 +72,7 @@ class DataGovV2Connector(BaseConnector):
         """
         Fetch dataset data from V2 API.
 
-        Tries list-rows API first (preferred for smaller datasets),
-        falls back to async download API for larger datasets.
+        Uses list-rows API for paginated data access.
 
         Args:
             dataset_ref: Dataset ID (e.g., 'd_xxxxx')
@@ -83,18 +82,6 @@ class DataGovV2Connector(BaseConnector):
         """
         dataset_id = dataset_ref
 
-        # Use download API by default (more efficient for larger datasets)
-        # list-rows API has rate limits (5 req/min) and returns only 10 rows per page
-        try:
-            return self._fetch_via_download(dataset_id)
-        except Exception as e:
-            logger.warning(
-                "Download API failed for %s, trying list-rows: %s",
-                dataset_id,
-                e,
-            )
-
-        # Fallback to list-rows API
         df = self._fetch_via_list_rows(dataset_id)
         if df is not None and not df.empty:
             logger.info(
@@ -129,7 +116,8 @@ class DataGovV2Connector(BaseConnector):
         all_rows.extend(rows)
 
         # Handle pagination
-        while data.get("links", {}).get("next"):
+        page_count = 1
+        while data.get("links", {}).get("next") and page_count < self.max_pages:
             next_link = data["links"]["next"]
             # Handle relative URLs - append to base URL
             if not next_link.startswith("http"):
@@ -141,6 +129,7 @@ class DataGovV2Connector(BaseConnector):
                 break
             data = response["data"]
             all_rows.extend(data.get("rows", []))
+            page_count += 1
 
             # Safety limit
             if len(all_rows) >= self.max_rows:
@@ -150,57 +139,17 @@ class DataGovV2Connector(BaseConnector):
                     dataset_id,
                 )
                 break
+        if data.get("links", {}).get("next") and page_count >= self.max_pages:
+            logger.info(
+                "Page limit (%d) reached for %s, data may be truncated",
+                self.max_pages,
+                dataset_id,
+            )
 
         if not all_rows:
             return None
 
         return pd.DataFrame(all_rows)
-
-    def _fetch_via_download(self, dataset_id: str) -> bytes:
-        """
-        Fetch dataset via initiate-download/poll-download API.
-
-        Args:
-            dataset_id: Dataset ID
-
-        Returns:
-            Raw bytes of downloaded file
-        """
-        # Step 1: Initiate download
-        initiate_url = f"{self.API_BASE_OPEN}/datasets/{dataset_id}/initiate-download"
-        init_response = self._make_request_with_retry(initiate_url)
-
-        if not init_response:
-            raise ValueError(f"Failed to initiate download for {dataset_id}")
-
-        # Check if URL is immediately available
-        if "data" in init_response and init_response["data"].get("url"):
-            download_url = init_response["data"]["url"]
-        else:
-            # Step 2: Poll for download URL
-            poll_url = f"{self.API_BASE_OPEN}/datasets/{dataset_id}/poll-download"
-            download_url = None
-
-            for attempt in range(10):
-                time.sleep(2)
-                poll_response = self._make_request_with_retry(poll_url)
-
-                if poll_response and "data" in poll_response:
-                    status = poll_response["data"].get("status", "")
-                    if status == "COMPLETED" or poll_response["data"].get("url"):
-                        download_url = poll_response["data"].get("url")
-                        break
-                    elif status == "FAILED":
-                        raise ValueError(f"Download preparation failed for {dataset_id}")
-
-            if not download_url:
-                raise ValueError(f"Download URL not available after polling for {dataset_id}")
-
-        # Step 3: Download the file
-        logger.info("Downloading dataset %s from %s", dataset_id, download_url)
-        response = requests.get(download_url, timeout=60)
-        response.raise_for_status()
-        return response.content
 
     def parse(self, raw_bytes: bytes, format_hint: Optional[str] = None) -> pd.DataFrame:
         """

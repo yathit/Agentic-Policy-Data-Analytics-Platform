@@ -122,19 +122,6 @@ class TestDataGovV2Integration:
         # Check validation report exists
         assert len(dataset.validation_reports) > 0
 
-    def test_download_api_directly(self, connector):
-        """Test the download API path directly."""
-        dataset_id = "d_c1295bd1935f06ac0646a10efbf07dbf"
-
-        raw_data = connector._fetch_via_download(dataset_id)
-
-        assert raw_data is not None
-        assert len(raw_data) > 0
-
-        # Should be valid CSV
-        df = connector.parse(raw_data)
-        assert not df.empty
-
 
 class TestDataGovV2ErrorHandling:
     """Test error handling for the V2 connector."""

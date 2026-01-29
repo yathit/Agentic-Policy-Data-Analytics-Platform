@@ -54,12 +54,9 @@ Primary open-data source for structured datasets suitable for demos and automate
 |----------|-----|---------|
 | Metadata | `GET /v2/public/api/datasets/{id}/metadata` | Schema info |
 | List Rows | `GET /v2/public/api/datasets/{id}/list-rows` | Paginated data |
-| Initiate Download | `GET /v1/public/api/datasets/{id}/initiate-download` | Async download |
-| Poll Download | `GET /v1/public/api/datasets/{id}/poll-download` | Get download URL |
 
 Base URLs:
 - `https://api-production.data.gov.sg` (v2)
-- `https://api-open.data.gov.sg` (v1 download)
 
 #### Discovery Flow
 
@@ -71,9 +68,7 @@ Base URLs:
 #### Data Fetching Flow
 
 1. `DataService.ingest_dataset()` receives selected dataset_id
-2. `DataGovV2Connector.fetch(dataset_id)` tries:
-   - **Primary:** `list-rows` API (paginated, for smaller datasets)
-   - **Fallback:** `initiate-download` → `poll-download` (async, for large datasets)
+2. `DataGovV2Connector.fetch(dataset_id)` uses the `list-rows` API (paginated)
 3. Parse response to DataFrame (CSV/JSON)
 4. Validate and clean per standard pipeline
 
@@ -89,7 +84,7 @@ Base URLs:
 
 - Retry with exponential backoff on 429, 5xx errors (base delay: 2s)
 - Max 3 retries per request
-- Poll download status up to 10 times (2s intervals)
+- Limit pagination to 2 pages by default for demo/testing (override via config `max_pages`)
 - Hard-fail on invalid response shape
 
 ---
@@ -245,6 +240,7 @@ Manual:
 Automated:
 - Unit tests for each connector
 - Validation test for missing/invalid columns
+- Integration: `pytest tests/integration/test_datagov_v2.py -v`
 
 ---
 
