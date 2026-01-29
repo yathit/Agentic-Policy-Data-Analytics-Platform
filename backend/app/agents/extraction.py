@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.schemas.events import AgentEvent, EventPhase, AgentType, event_store
 from app.schemas.plan import Plan, ExtractionStep
 from app.connectors.base import BaseConnector, QualityReport
-from app.connectors import DataGovConnector, SingStatConnector, InternalConnector
+from app.connectors import DataGovV2Connector, SingStatConnector, InternalConnector
 from app.services.data_service import DataService
 from app.models.dataset import Dataset
 
@@ -63,7 +63,7 @@ class ExtractionAgent:
 
         # Initialize connectors
         self.connectors: Dict[str, BaseConnector] = {
-            "data.gov.sg": DataGovConnector(),
+            "data.gov.sg": DataGovV2Connector(),
             "singstat": SingStatConnector(),
             "internal": InternalConnector(),
         }
