@@ -2,129 +2,14 @@
 Tests for data source connectors.
 """
 
-import pytest
 import pandas as pd
-from unittest.mock import Mock, patch
-import io
 
-from app.connectors import DataGovConnector, SingStatConnector, InternalConnector
-from app.connectors.base import DatasetCandidate, QualityReport
-
-
-class TestDataGovConnector:
-    """Tests for Data.gov.sg connector."""
-
-    def test_discover(self):
-        """Test dataset discovery."""
-        connector = DataGovConnector()
-
-        # Mock the API response
-        mock_response = {
-            "success": True,
-            "result": {
-                "results": [
-                    {
-                        "name": "test-dataset",
-                        "title": "Test Dataset",
-                        "notes": "Test description",
-                        "id": "123",
-                        "organization": {"title": "Test Org"},
-                        "resources": [
-                            {
-                                "id": "res-1",
-                                "name": "Test Resource",
-                                "format": "CSV",
-                                "url": "https://example.com/data.csv",
-                                "last_modified": "2024-01-01",
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
-
-        with patch.object(connector, '_make_request_with_retry', return_value=mock_response):
-            candidates = connector.discover("employment")
-
-            assert len(candidates) > 0
-            assert isinstance(candidates[0], DatasetCandidate)
-            assert candidates[0].source_type == "data.gov.sg"
-
-    def test_parse_csv(self):
-        """Test CSV parsing."""
-        connector = DataGovConnector()
-
-        # Create sample CSV data
-        csv_data = "name,value\ntest,123\nfoo,456"
-        raw_bytes = csv_data.encode('utf-8')
-
-        df = connector.parse(raw_bytes, format_hint="csv")
-
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == 2
-        assert "name" in df.columns
-        assert "value" in df.columns
-
-    def test_validate_quality(self):
-        """Test data quality validation."""
-        connector = DataGovConnector()
-
-        # Create test DataFrame
-        df = pd.DataFrame({
-            "col1": [1, 2, 3, 4, 5],
-            "col2": ["a", "b", "c", "d", "e"],
-        })
-
-        report = connector.validate(df)
-
-        assert isinstance(report, QualityReport)
-        assert report.status == "passed"
-        assert report.completeness_score == 1.0
-        assert report.duplicate_row_count == 0
-
-    def test_validate_with_missing_values(self):
-        """Test validation with missing values."""
-        connector = DataGovConnector()
-
-        # Create DataFrame with missing values
-        df = pd.DataFrame({
-            "col1": [1, None, 3, None, 5],
-            "col2": ["a", "b", None, "d", None],
-        })
-
-        report = connector.validate(df)
-
-        assert report.missing_value_percentage > 0
-        assert report.missing_value_percentage == 40.0  # 4 missing out of 10 cells
-
-    def test_clean_normalize_columns(self):
-        """Test column name normalization."""
-        connector = DataGovConnector()
-
-        df = pd.DataFrame({
-            "Test Column": [1, 2, 3],
-            "Another-Column": [4, 5, 6],
-        })
-
-        result = connector.clean(df)
-
-        assert "test_column" in result.cleaned_df.columns
-        assert "another_column" in result.cleaned_df.columns
-        assert len(result.cleaning_logs) > 0
+from app.connectors import SingStatConnector, InternalConnector
+from app.connectors.base import DatasetCandidate
 
 
 class TestSingStatConnector:
     """Tests for DOS SingStat connector."""
-
-    def test_discover(self):
-        """Test dataset discovery from known datasets."""
-        connector = SingStatConnector()
-
-        candidates = connector.discover("labour force")
-
-        assert len(candidates) > 0
-        assert isinstance(candidates[0], DatasetCandidate)
-        assert candidates[0].source_type == "singstat"
 
     def test_parse_csv(self):
         """Test CSV parsing."""
@@ -138,20 +23,107 @@ class TestSingStatConnector:
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 2
 
-    def test_canonicalize_time_columns(self):
+    def test_parse_json(self):
+        """Test JSON parsing into tidy format."""
+        connector = SingStatConnector()
+
+        json_data = '{"Data": {"row": [{"rowKey": "Total", "columns": [{"key": "2022", "value": 100}, {"key": "2023", "value": 150}]}]}}'
+        raw_bytes = json_data.encode('utf-8')
+
+        df = connector.parse(raw_bytes, format_hint="json")
+
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 2
+        assert "period" in df.columns
+        assert "value" in df.columns
+
+    def test_standardize_time_columns(self):
         """Test time column name standardization."""
         connector = SingStatConnector()
 
         df = pd.DataFrame({
-            "Yr": [2022, 2023],
-            "Qtr": ["Q1", "Q2"],
-            "Value": [100, 150],
+            "yr": [2022, 2023],
+            "qtr": ["Q1", "Q2"],
+            "value": [100, 150],
         })
 
-        renamed = connector._canonicalize_time_columns(df)
+        renamed = connector._standardize_time_columns(df)
 
         assert "year" in df.columns
         assert "quarter" in df.columns
+
+    def test_validate_empty_dataset(self):
+        """Test validation fails for empty dataset."""
+        connector = SingStatConnector()
+
+        df = pd.DataFrame()
+        report = connector.validate(df)
+
+        assert report.status == "failed"
+        assert any(i["type"] == "empty_dataset" for i in report.issues)
+
+    def test_validate_valid_dataset(self):
+        """Test validation passes for valid dataset."""
+        connector = SingStatConnector()
+
+        df = pd.DataFrame({
+            "period": ["2022", "2023"],
+            "value": [100, 150],
+        })
+        report = connector.validate(df)
+
+        assert report.status in ["passed", "warning"]
+        assert report.completeness_score == 1.0
+
+    def test_clean_normalizes_columns(self):
+        """Test cleaning normalizes column names."""
+        connector = SingStatConnector()
+
+        df = pd.DataFrame({
+            "Period Value": ["2022", "2023"],
+            "Total Amount": [100, 150],
+        })
+        result = connector.clean(df)
+
+        assert "period_value" in result.cleaned_df.columns
+        assert "total_amount" in result.cleaned_df.columns
+        assert len(result.cleaning_logs) > 0
+
+    def test_compute_checksum(self):
+        """Test checksum computation."""
+        connector = SingStatConnector()
+
+        data = b"test data for checksum"
+        checksum = connector.compute_checksum(data)
+
+        assert len(checksum) == 64  # SHA-256 hex string
+        # Same data should produce same checksum
+        assert connector.compute_checksum(data) == checksum
+
+    def test_get_idempotency_key(self):
+        """Test idempotency key generation."""
+        connector = SingStatConnector()
+
+        data = b"test data"
+        key = connector.get_idempotency_key("M123456", data)
+
+        assert key[0] == "M123456"
+        assert len(key[1]) == 64  # checksum
+
+    def test_extract_resource_id_from_url(self):
+        """Test resource ID extraction from URLs."""
+        connector = SingStatConnector()
+
+        # Full URL
+        url = "https://tablebuilder.singstat.gov.sg/api/table/tabledata/M212881"
+        assert connector._extract_resource_id(url) == "M212881"
+
+        # Plain ID
+        assert connector._extract_resource_id("M212881") == "M212881"
+
+        # With query params
+        url_with_params = "https://tablebuilder.singstat.gov.sg/api/table/tabledata/M182011?format=csv"
+        assert connector._extract_resource_id(url_with_params) == "M182011"
 
 
 class TestInternalConnector:

@@ -159,7 +159,7 @@ class ChartData(BaseModel):
 
 class Citation(BaseModel):
     """Citation for an insight."""
-    dataset_id: Optional[UUID] = None
+    dataset_id: Optional[str] = None
     source: str
     columns: List[str]
 
@@ -181,11 +181,21 @@ class InsightResponse(BaseModel):
     confidence: float
 
 
+class DatasetInfo(BaseModel):
+    """Dataset provenance info for UI."""
+    id: str
+    name: str
+    uri: str
+    retrieved_at: datetime
+    record_count: Optional[int] = None
+
+
 class ArtifactsResponse(BaseModel):
     """Artifacts for a run."""
     tables: Optional[Dict[str, TableData]] = None
     charts: Optional[Dict[str, ChartData]] = None
     insights: Optional[List[InsightResponse]] = None
+    datasets: Optional[List[DatasetInfo]] = None
     report_md: Optional[str] = None
 
 

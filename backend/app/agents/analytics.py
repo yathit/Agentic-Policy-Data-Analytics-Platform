@@ -13,7 +13,7 @@ import json
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -72,7 +72,12 @@ class AnalyticsAgent:
     - Every claim cited with dataset ID
     """
 
-    def __init__(self, db: Session, llm_router: Optional[LLMRouter] = None):
+    def __init__(
+        self,
+        db: Session,
+        llm_router: Optional[LLMRouter] = None,
+        event_sink: Optional[Callable[[AgentEvent], None]] = None,
+    ):
         """
         Initialize Analytics Agent.
 
@@ -83,6 +88,7 @@ class AnalyticsAgent:
         self.db = db
         self.llm_router = llm_router or LLMRouter()
         self.system_prompt = self._load_system_prompt()
+        self.event_sink = event_sink
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from file."""
@@ -111,10 +117,17 @@ class AnalyticsAgent:
             message=message,
             payload=payload or {},
         )
-        event_store.emit(event)
+        if self.event_sink:
+            self.event_sink(event)
+        else:
+            event_store.emit(event)
 
     def run_analysis(
-        self, run_id: str, approved_plan: Plan, datasets: List[Dataset]
+        self,
+        run_id: str,
+        approved_plan: Plan,
+        datasets: List[Dataset],
+        abort_check: Optional[Callable[[], bool]] = None,
     ) -> AnalyticsResult:
         """
         Execute analysis steps from approved plan.
@@ -140,6 +153,14 @@ class AnalyticsAgent:
 
         # Execute each analysis step
         for idx, step in enumerate(approved_plan.analysis_steps):
+            if abort_check and abort_check():
+                self._emit_event(
+                    run_id,
+                    EventPhase.DECISION,
+                    "Analysis aborted by user",
+                    {"status": "aborted"},
+                )
+                break
             self._emit_event(
                 run_id,
                 EventPhase.ACTION,

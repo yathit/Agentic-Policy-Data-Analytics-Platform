@@ -41,13 +41,11 @@ Implement a comprehensive, demo-ready test suite that covers:
 - `backend/tests/test_agents_coordinator.py`
 - `backend/tests/test_agents_extraction.py`
 - `backend/tests/test_agents_analytics.py`
-- `backend/tests/test_connectors_datagovsg.py`
 - `backend/tests/test_connectors_singstat.py`
 - `backend/tests/test_quality_validation.py`
 - `backend/tests/test_insight_grounding.py`
 - `backend/tests/integration/test_pipeline_e2e.py`
 - `backend/tests/fixtures/` (recorded responses + small sample datasets)
-  - `datagov_sg_sample.json`
   - `singstat_sample.csv`
   - `singstat_sample.xlsx` (optional)
   - `pipeline_expected_artifacts.json`
@@ -83,7 +81,7 @@ Implement a comprehensive, demo-ready test suite that covers:
   - emits ReAct events
 
 **Connectors**
-- Data.gov.sg connector parses JSON/CSV → normalized DataFrame
+- Data.gov.sg V2 connector parses JSON/CSV → normalized DataFrame
 - SingStat connector parses CSV/Excel → normalized DataFrame
 - Failure handling: timeout/retry path returns structured error event
 
@@ -161,7 +159,14 @@ These are policy-critical for the assessment.
 cd backend
 pytest -q
 pytest --cov=app --cov-report=term-missing
-````
+```
+
+### Integration (assumes services already up)
+```bash
+# Execute integration tests inside the api container
+docker compose -f infra/docker-compose.yml run --rm api pytest tests/integration/test_datagov.py -v
+docker compose -f infra/docker-compose.yml run --rm api pytest tests/integration/test_pipeline_e2e.py -v
+```
 
 ### Frontend
 

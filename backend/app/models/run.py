@@ -74,6 +74,7 @@ class Plan(Base):
 
     # Plan content
     steps = Column(JSON, nullable=False)  # List of step objects
+    plan_json = Column(JSON, nullable=True)  # Full structured plan (schemas.plan.Plan)
     source_rationale = Column(JSON, nullable=True)  # List of source rationale objects
 
     # Approval

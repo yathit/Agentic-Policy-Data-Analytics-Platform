@@ -10,8 +10,9 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ../backend/app/db/sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-imda_policy}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -50,6 +51,7 @@ services:
       # LLM API Keys (add to .env file)
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DATA_GOV_SG_API_KEY: ${DATA_GOV_SG_API_KEY}
     ports:
       - "8000:8000"
     volumes:
@@ -103,6 +105,7 @@ services:
       REDIS_DB: 0
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DATA_GOV_SG_API_KEY: ${DATA_GOV_SG_API_KEY}
     volumes:
       - ../backend/app:/app/app
       - ../.llm:/app/.llm

@@ -31,10 +31,6 @@ This task focuses on **data acquisition and validation only**. No analytics or U
 **Purpose**
 Primary open-data source for structured datasets suitable for demos and automated extraction.
 
-**Access Pattern**
-- REST API (`/api/action/datastore_search`)
-- Direct CSV download (fallback)
-
 **Typical Datasets**
 - Employment by industry
 - Workforce demographics
@@ -44,20 +40,65 @@ Primary open-data source for structured datasets suitable for demos and automate
 - JSON (API)
 - CSV
 
-**Handling Rules**
-- Prefer API endpoints when available
-- Fallback to CSV download if API fails
-- Retry with exponential backoff on transient errors
+#### Architecture
+
+**Two-phase approach:**
+1. **Discovery** — Query cached `data_gov_sg_collection` table (not API)
+2. **Fetching** — Use V2 API to retrieve actual dataset data
+
+**Connector:** `DataGovV2Connector` (new, replaces legacy CKAN connector)
+
+#### V2 API Endpoints
+
+| Endpoint | URL | Purpose |
+|----------|-----|---------|
+| Metadata | `GET /v2/public/api/datasets/{id}/metadata` | Schema info |
+| List Rows | `GET /v2/public/api/datasets/{id}/list-rows` | Paginated data |
+
+Base URLs:
+- `https://api-production.data.gov.sg` (v2)
+
+#### Discovery Flow
+
+1. User provides intent (e.g., "employment statistics")
+2. `DataService.discover_datasets()` calls `search_collections(db, intent)`
+3. Returns dataset candidates with `uri` = dataset_id (e.g., `d_abc123`)
+4. Each candidate includes collection metadata (name, description, last_updated)
+
+#### Data Fetching Flow
+
+1. `DataService.ingest_dataset()` receives selected dataset_id
+2. `DataGovV2Connector.fetch(dataset_id)` uses the `list-rows` API (paginated)
+3. Parse response to DataFrame (CSV/JSON)
+4. Validate and clean per standard pipeline
+
+#### Files
+
+| File | Purpose |
+|------|---------|
+| `connectors/datagov_v2.py` | V2 connector implementation |
+| `connectors/__init__.py` | Export new connector |
+| `services/data_service.py` | Register V2 connector for `data.gov.sg` |
+
+#### Handling Rules
+
+- Retry with exponential backoff on 429, 5xx errors (base delay: 2s)
+- Max 3 retries per request
+- Limit pagination to 2 pages by default for demo/testing (override via config `max_pages`)
+- Hard-fail on invalid response shape
 
 ---
 
 ### 2. DOS SingStat (External, Public)
 
 **Purpose**
-Authoritative national statistics source demonstrating Excel/CSV handling and schema normalization.
+Authoritative national statistics source; use SingStat Table Builder for time-series and cross-sectional tables.
 
 **Access Pattern**
-- Static file downloads (CSV / Excel)
+- Discover tables via SingStat Table Builder (free access to ~2,400 datasets / ~150,000 data series from 70 agencies). citeturn1view0
+- Prefer SingStat Table Builder APIs for commonly accessed tables (JSON/CSV). citeturn10view0
+- Use developer APIs for parameterized/custom queries when standard APIs are insufficient. citeturn10view0
+- Export customised tables in different formats; supports downloading multiple tables at once. citeturn10view0
 
 **Typical Datasets**
 - Labour force statistics
@@ -65,10 +106,12 @@ Authoritative national statistics source demonstrating Excel/CSV handling and sc
 - Time-series economic indicators
 
 **Formats**
-- CSV
-- Excel (`.xls`, `.xlsx`)
+- JSON / CSV (API) 
+- CSV / Excel (`.xls`, `.xlsx`) via table export
 
 **Handling Rules**
+- Prefer API responses (JSON/CSV) when available for reliability and repeatability. 
+- Fallback to exported CSV/Excel for tables without API coverage. citeturn10view0
 - Normalize multi-row headers
 - Canonicalize time columns (Year / Quarter / Month)
 - Preserve original column labels in metadata
@@ -197,6 +240,7 @@ Manual:
 Automated:
 - Unit tests for each connector
 - Validation test for missing/invalid columns
+- Integration: `pytest tests/integration/test_datagov.py -v`
 
 ---
 

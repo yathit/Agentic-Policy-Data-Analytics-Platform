@@ -245,7 +245,7 @@ Respond with JSON:
             List of proposed data sources
         """
         # For Singapore policy data, default sources
-        allowed_sources = ["data.gov.sg", "singstat", "mock_internal"]
+        allowed_sources = ["data.gov.sg", "singstat", "internal"]
 
         if user_constraints and "allowed_sources" in user_constraints:
             allowed_sources = user_constraints["allowed_sources"]
@@ -277,7 +277,7 @@ Respond with JSON:
         if not sources:
             sources.append(
                 DataSource(
-                    name="mock_internal", datasets=["sample_dataset"], format="csv"
+                    name="internal", datasets=["table:digital_sector_employment"], format="database"
                 )
             )
 

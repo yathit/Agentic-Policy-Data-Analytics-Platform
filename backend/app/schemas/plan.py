@@ -34,7 +34,7 @@ class DataSource(BaseModel):
     """Data source specification."""
 
     name: str = Field(
-        ..., description="Source name: data.gov.sg, singstat, mock_internal"
+        ..., description="Source name: data.gov.sg, singstat, internal"
     )
     datasets: List[str] = Field(..., description="Specific dataset names or IDs")
     format: str = Field(..., description="Data format: api, csv, excel, json")
