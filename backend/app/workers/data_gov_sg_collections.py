@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TypedDict
 
 from app.core.database import SessionLocal
+from app.core.config import settings
 from app.connectors.data_gov_sg import fetch_collections_page
 from app.db.repo_data_gov_sg_collection import insert_many_ignore_conflicts, CollectionRow
 
@@ -122,7 +123,7 @@ def run_data_gov_sg_collections_ingest() -> IngestResult:
 
     try:
         # Fetch first page to get total page count
-        result = fetch_collections_page(page=1)
+        result = fetch_collections_page(page=1, api_key=settings.data_gov_sg_api_key)
         total_pages = result["pages"]
         pages_fetched = 1
 
@@ -135,7 +136,7 @@ def run_data_gov_sg_collections_ingest() -> IngestResult:
         # Fetch remaining pages
         for page in range(2, total_pages + 1):
             try:
-                result = fetch_collections_page(page=page)
+                result = fetch_collections_page(page=page, api_key=settings.data_gov_sg_api_key)
                 pages_fetched += 1
 
                 seen, inserted, page_skipped = _process_page(result["collections"], db, errors)

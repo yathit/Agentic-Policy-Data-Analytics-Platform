@@ -51,6 +51,7 @@ class DataGovV2Connector(BaseConnector):
         self.max_rows = config.get("max_rows", 100000) if config else 100000
         # Keep integration/demo runs fast; override via config if needed.
         self.max_pages = config.get("max_pages", 2) if config else 2
+        self.api_key = config.get("api_key") if config else None
 
     def discover(self, intent: str) -> List[DatasetCandidate]:
         """
@@ -350,7 +351,13 @@ class DataGovV2Connector(BaseConnector):
         """
         for attempt in range(self.max_retries):
             try:
-                response = requests.get(url, params=params, timeout=self.request_timeout)
+                headers = {"X-API-KEY": self.api_key} if self.api_key else None
+                response = requests.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=self.request_timeout,
+                )
 
                 if response.status_code in self.RETRYABLE_STATUS_CODES:
                     if attempt < self.max_retries - 1:

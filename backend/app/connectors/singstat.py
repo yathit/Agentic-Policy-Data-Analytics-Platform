@@ -7,6 +7,8 @@ import requests
 import pandas as pd
 import io
 import time
+import logging
+from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -16,6 +18,8 @@ from app.connectors.base import (
     QualityReport,
     CleaningResult,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SingStatConnector(BaseConnector):
@@ -30,6 +34,12 @@ class SingStatConnector(BaseConnector):
     """
 
     BASE_URL = "https://tablebuilder.singstat.gov.sg"
+    DEFAULT_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (compatible; IMDA-Policy-Analytics/1.0)",
+        "Accept": "text/csv,application/json;q=0.9,*/*;q=0.8",
+        "Referer": "https://tablebuilder.singstat.gov.sg/",
+        "Origin": "https://tablebuilder.singstat.gov.sg",
+    }
 
     # Common SingStat datasets (can be expanded)
     KNOWN_DATASETS = {
@@ -51,6 +61,8 @@ class SingStatConnector(BaseConnector):
         super().__init__(config)
         self.max_retries = config.get("max_retries", 3) if config else 3
         self.retry_delay = config.get("retry_delay", 1) if config else 1
+        self.session = requests.Session()
+        self.extra_headers = config.get("headers", {}) if config else {}
 
     def discover(self, intent: str) -> List[DatasetCandidate]:
         """
@@ -101,22 +113,55 @@ class SingStatConnector(BaseConnector):
             Raw bytes of the dataset
         """
         try:
-            for attempt in range(self.max_retries):
-                try:
-                    response = requests.get(dataset_ref, timeout=30)
-                    response.raise_for_status()
-                    return response.content
+            url = self._normalize_dataset_ref(dataset_ref)
+            headers = self._build_headers()
+            last_error: Optional[Exception] = None
 
-                except requests.exceptions.RequestException as e:
-                    if attempt < self.max_retries - 1:
-                        delay = self.retry_delay * (2 ** attempt)
-                        print(f"Download failed, retrying in {delay}s...")
-                        time.sleep(delay)
-                    else:
-                        raise
+            for attempt in range(self.max_retries):
+                for candidate_url in self._candidate_urls(url):
+                    try:
+                        response = self.session.get(
+                            candidate_url,
+                            headers=headers,
+                            timeout=30,
+                        )
+                        response.raise_for_status()
+                        return response.content
+                    except requests.exceptions.HTTPError as e:
+                        last_error = e
+                        status = e.response.status_code if e.response else None
+                        response_text = ""
+                        if e.response is not None and e.response.text:
+                            response_text = e.response.text[:200]
+                        logger.warning(
+                            "SingStat request failed (status=%s) for %s. Body: %s",
+                            status,
+                            candidate_url,
+                            response_text,
+                        )
+                        # For 4xx (except 429), try next candidate URL without retrying.
+                        if status and 400 <= status < 500 and status != 429:
+                            continue
+                    except requests.exceptions.RequestException as e:
+                        last_error = e
+                        logger.warning(
+                            "SingStat request error for %s: %s",
+                            candidate_url,
+                            e,
+                        )
+                        continue
+
+                if attempt < self.max_retries - 1:
+                    delay = self.retry_delay * (2 ** attempt)
+                    logger.warning("SingStat download failed, retrying in %ss...", delay)
+                    time.sleep(delay)
+                else:
+                    if last_error:
+                        raise last_error
+                    raise ValueError("Unknown error while fetching SingStat dataset")
 
         except Exception as e:
-            raise ValueError(f"Failed to fetch dataset from SingStat: {e}")
+            raise ValueError(f"Failed to fetch dataset from SingStat: {self._summarize_error(e)}")
 
     def parse(self, raw_bytes: bytes, format_hint: Optional[str] = None) -> pd.DataFrame:
         """
@@ -146,6 +191,57 @@ class SingStatConnector(BaseConnector):
 
         except Exception as e:
             raise ValueError(f"Failed to parse SingStat dataset: {e}")
+
+    def _build_headers(self) -> Dict[str, str]:
+        headers = dict(self.DEFAULT_HEADERS)
+        headers.update(self.extra_headers or {})
+        return headers
+
+    def _normalize_dataset_ref(self, dataset_ref: str) -> str:
+        if dataset_ref.startswith("http://") or dataset_ref.startswith("https://"):
+            return dataset_ref
+        return f"{self.BASE_URL}/api/table/tabledata/{dataset_ref}"
+
+    def _candidate_urls(self, url: str) -> List[str]:
+        parsed = urlparse(url)
+        base_query = dict(parse_qsl(parsed.query))
+        candidates = [url]
+
+        if "format" not in base_query:
+            base_query_csv = dict(base_query)
+            base_query_csv["format"] = "csv"
+            candidates.append(
+                urlunparse(parsed._replace(query=urlencode(base_query_csv)))
+            )
+
+        if "download" not in base_query:
+            base_query_dl = dict(base_query)
+            base_query_dl["download"] = "1"
+            candidates.append(
+                urlunparse(parsed._replace(query=urlencode(base_query_dl)))
+            )
+
+        if "format" in base_query or "download" in base_query:
+            return candidates
+
+        base_query_csv_dl = dict(base_query)
+        base_query_csv_dl["format"] = "csv"
+        base_query_csv_dl["download"] = "1"
+        candidates.append(
+            urlunparse(parsed._replace(query=urlencode(base_query_csv_dl)))
+        )
+
+        return list(dict.fromkeys(candidates))
+
+    def _summarize_error(self, error: Exception) -> str:
+        if isinstance(error, requests.exceptions.HTTPError) and error.response is not None:
+            status = error.response.status_code
+            url = error.response.url
+            body = (error.response.text or "")[:200]
+            if body:
+                return f"HTTP {status} for {url} - {body}"
+            return f"HTTP {status} for {url}"
+        return str(error)
 
     def validate(self, df: pd.DataFrame) -> QualityReport:
         """

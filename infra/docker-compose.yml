@@ -51,6 +51,7 @@ services:
       # LLM API Keys (add to .env file)
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DATA_GOV_SG_API_KEY: ${DATA_GOV_SG_API_KEY}
     ports:
       - "8000:8000"
     volumes:
@@ -104,6 +105,7 @@ services:
       REDIS_DB: 0
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DATA_GOV_SG_API_KEY: ${DATA_GOV_SG_API_KEY}
     volumes:
       - ../backend/app:/app/app
       - ../.llm:/app/.llm

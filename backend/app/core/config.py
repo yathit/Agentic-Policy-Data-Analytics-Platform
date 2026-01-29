@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     data_gov_sg_ingest_weekly_cron: str = "0 2 * * 0"  # Sunday 02:00
     data_gov_sg_ingest_tz: str = "Asia/Singapore"
     data_gov_sg_ingest_startup_if_empty: bool = True
+    data_gov_sg_api_key: str | None = None
 
     @property
     def database_url(self) -> str:

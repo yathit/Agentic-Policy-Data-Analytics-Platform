@@ -21,6 +21,7 @@ def fetch_collections_page(
     timeout: int = 30,
     max_retries: int = 3,
     base_delay: float = 1.0,
+    api_key: str | None = None,
 ) -> CollectionsPageResult:
     """
     Fetch a single page of collections from data.gov.sg V2 API.
@@ -42,12 +43,13 @@ def fetch_collections_page(
     """
     url = "https://api-production.data.gov.sg/v2/public/api/collections"
     params = {"page": page}
+    headers = {"X-API-KEY": api_key} if api_key else None
 
     last_exception: Exception | None = None
 
     for attempt in range(max_retries + 1):
         try:
-            response = requests.get(url, params=params, timeout=timeout)
+            response = requests.get(url, params=params, headers=headers, timeout=timeout)
 
             # Check for retryable status codes
             if response.status_code in RETRYABLE_STATUS_CODES:

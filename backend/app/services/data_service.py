@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.connectors.base import BaseConnector, QualityReport, CleaningResult
 from app.connectors import DataGovV2Connector, SingStatConnector, InternalConnector
+from app.core.config import settings
 from app.db.repo_data_gov_sg_collection import search_collections
 from app.models.dataset import Dataset, DatasetProvenance, ValidationReport, CleaningLog
 
@@ -36,7 +37,9 @@ class DataService:
         """
         self.db = db
         self.connectors: Dict[str, BaseConnector] = {
-            "data.gov.sg": DataGovV2Connector(),
+            "data.gov.sg": DataGovV2Connector(
+                config={"api_key": settings.data_gov_sg_api_key}
+            ),
             "singstat": SingStatConnector(),
             "internal": InternalConnector(),
         }
