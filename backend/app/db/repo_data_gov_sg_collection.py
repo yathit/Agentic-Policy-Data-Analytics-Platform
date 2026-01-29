@@ -2,6 +2,7 @@
 Repository for data_gov_sg_collection table operations.
 """
 
+import json
 from datetime import datetime
 from typing import TypedDict
 from sqlalchemy import text
@@ -47,7 +48,7 @@ def insert_many_ignore_conflicts(db: Session, rows: list[CollectionRow]) -> int:
             "name": row["name"],
             "description": row["description"],
             "child_dataset_ids": row["child_dataset_ids"],
-            "payload": row["payload"],
+            "payload": json.dumps(row["payload"]),
         })
         # For INSERT ... ON CONFLICT DO NOTHING, rowcount is 1 if inserted, 0 if skipped
         inserted += result.rowcount

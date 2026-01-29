@@ -15,7 +15,10 @@
       "Bash(docker info:*)",
       "Bash(docker-compose run:*)",
       "Bash(dir \"c:\\\\Users\\\\kyawtun\\\\WebstormProjects\\\\Agentic-Policy-Data-Analytics-Platform\\\\frontend\")",
-      "Bash(dir \"c:\\\\Users\\\\kyawtun\\\\WebstormProjects\\\\Agentic-Policy-Data-Analytics-Platform\")"
+      "Bash(dir \"c:\\\\Users\\\\kyawtun\\\\WebstormProjects\\\\Agentic-Policy-Data-Analytics-Platform\")",
+      "Bash(docker logs:*)",
+      "Bash(docker restart:*)",
+      "Bash(docker exec:*)"
     ]
   }
 }

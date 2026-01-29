@@ -87,6 +87,26 @@ result = connector.clean(df)
 - License: "Singapore Open Data License"
 - Retrieval method: "api" or "download"
 
+#### Collections Metadata Cache
+
+The platform maintains a local cache of data.gov.sg collection metadata in the `data_gov_sg_collection` table. This enables fast dataset discovery without hitting the API.
+
+**Automatic Ingest:**
+- **Weekly schedule:** Sundays at 02:00 SGT (configurable)
+- **Startup bootstrap:** If table is empty on startup, ingest runs automatically
+
+**Verify cached collections:**
+
+```bash
+docker exec policy-analytics-postgres psql -U user -d imda_policy -c "SELECT COUNT(*) FROM data_gov_sg_collection;"
+```
+
+**Search collections:**
+
+```bash
+docker exec policy-analytics-postgres psql -U user -d imda_policy -c "SELECT collection_id, name FROM data_gov_sg_collection_latest WHERE name ILIKE '%employment%' LIMIT 10;"
+```
+
 ---
 
 ### 2. DOS SingStat
