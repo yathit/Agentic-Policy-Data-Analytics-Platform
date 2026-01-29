@@ -15,6 +15,7 @@ This task focuses strictly on **data acquisition, validation, and provenance**, 
 - Parsing, validation, and cleaning into a canonical tabular form
 - Metadata and provenance capture
 - Idempotent storage of retrieved data
+- Lightweight integration tests (fast, deterministic)
 
 ### Out of Scope
 - Full catalog ingestion of all SingStat tables
@@ -162,32 +163,65 @@ This metadata is required for downstream citation and auditability.
 Failures must be observable and non-silent.
 
 ---
+## End-to-End Smoke Test (Live SingStat Developer API)
 
-## Deliverables
+### Purpose
+Provide a **single, fast** end-to-end validation that the SingStat connector can **discover and fetch live data** from the SingStat Table Builder Developer API, producing a parsed + validated + cleaned dataset.
 
-- SingStat data connector specification implemented and registered
-- Structured documentation suitable for inclusion in `DATA_SOURCES.md`
-- Unit-testable behavior for:
-  - Discovery
-  - Retrieval
-  - Parsing
-  - Validation
-  - Cleaning
+### When to run
+- **Debug / pre-demo** verification 
+- Not required in CI by default (external dependency + network variability).
 
----
+### Test Inputs
+- Use **one stable keyword query** (e.g., a broad term like “labour force” or “consumer price index”) and/or a **pinned known resource/table ID** (preferred for stability).
+- Prefer a **Time Series (TS)** table for consistent output.
 
-## Acceptance Criteria
+### Flow (Single Test)
+1) `discover(intent)` against live API
+   - Expect at least 1 candidate returned
+   - If configured `prefer_ts=true`, expect the top candidate to be TS (best-effort)
 
-- SingStat tables can be discovered by keyword
-- Selected tables can be retrieved via API
-- Parsed data conforms to canonical structure
-- Validation and cleaning reports are persisted
-- Provenance metadata is complete and reproducible
-- Connector integrates cleanly with existing data-source framework
+2) Select candidate (deterministic)
+   - Prefer:
+     - pinned `resource_id` if configured
+     - else the top-ranked candidate from discovery
 
----
+3) `fetch(dataset_ref)` live
+   - Prefer JSON; fallback to CSV only if JSON is unavailable
+   - Enforce strict timeouts (see below)
 
-## Notes
+4) `parse(raw)` → DataFrame
+   - Must produce a non-empty dataset
 
-This connector intentionally treats SingStat as a **query-driven statistical system**, not a dataset catalog.  
-The design prioritizes correctness, transparency, and operational simplicity over exhaustive coverage.
+5) `validate(df)`
+   - Must return `passed` or `warning` (not `failed`)
+
+6) `clean(df)`
+   - Must preserve row count within a reasonable bound (no accidental drop-to-empty)
+   - Must output canonical columns (`value` required; `period` expected for TS tables)
+
+### Assertions (Minimal, Fast)
+- Discovery returns ≥ 1 dataset candidate
+- Fetch returns non-empty payload
+- Parse returns non-empty table
+- `value` column exists and is numeric-coercible
+- For TS: `period` exists and has at least 2 distinct values
+- Validation status is not `failed`
+- Cleaning log is non-empty (at least column normalization + value coercion recorded)
+- Provenance captured: `source`, `resource_id`, `retrieved_at`, `checksum`
+
+### Time Budget / Limits
+- Hard timeout per HTTP request: 10–15s
+- Max retries: 1 (keep test fast)
+- Limit downloaded payload size where API supports it (or limit parsing to first N rows if necessary)
+- Overall test budget target: < 20s under normal connectivity
+
+### Failure Behavior
+- If the live API is unreachable / times out:
+  - mark as skipped if clearly network-related (recommended), otherwise fail with a concise error.
+- If schema changes cause parse failure:
+  - fail with a clear message indicating which stage failed (discover/fetch/parse/validate/clean).
+
+### Deliverable
+- One end-to-end smoke test case documented and executable via environment flags, intended for **quick pre-submission verification**.
+
