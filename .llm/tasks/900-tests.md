@@ -164,7 +164,7 @@ pytest --cov=app --cov-report=term-missing
 ### Integration (assumes services already up)
 ```bash
 # Execute integration tests inside the api container
-docker compose -f infra/docker-compose.yml run --rm api pytest tests/integration/test_datagov_v2.py -v
+docker compose -f infra/docker-compose.yml run --rm api pytest tests/integration/test_datagov.py -v
 docker compose -f infra/docker-compose.yml run --rm api pytest tests/integration/test_pipeline_e2e.py -v
 ```
 

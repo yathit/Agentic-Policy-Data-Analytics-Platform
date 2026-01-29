@@ -240,7 +240,7 @@ Manual:
 Automated:
 - Unit tests for each connector
 - Validation test for missing/invalid columns
-- Integration: `pytest tests/integration/test_datagov_v2.py -v`
+- Integration: `pytest tests/integration/test_datagov.py -v`
 
 ---
 

@@ -2,7 +2,7 @@
 Integration tests for Data.gov.sg V2 connector.
 
 These tests make real API calls to data.gov.sg.
-Run with: pytest tests/integration/test_datagov_v2.py -v
+Run with: pytest tests/integration/test_datagov.py -v
 
 To skip in CI, use: pytest -m "not integration"
 """
