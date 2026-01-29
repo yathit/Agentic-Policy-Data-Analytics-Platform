@@ -30,14 +30,33 @@ class Intent(BaseModel):
     )
 
 
+class DiscoveredDataset(BaseModel):
+    """A dataset discovered through connector discovery."""
+
+    id: str = Field(..., description="Dataset ID or reference URI")
+    title: str = Field(..., description="Human-readable dataset title")
+    score: float = Field(default=0.0, description="Relevance score (0-1)")
+    discovered_by: str = Field(..., description="Discovery method or connector name")
+
+
 class DataSource(BaseModel):
     """Data source specification."""
 
     name: str = Field(
         ..., description="Source name: data.gov.sg, singstat, internal"
     )
-    datasets: List[str] = Field(..., description="Specific dataset names or IDs")
+    datasets: List[DiscoveredDataset] = Field(
+        default_factory=list, description="Discovered datasets with metadata"
+    )
     format: str = Field(..., description="Data format: api, csv, excel, json")
+
+
+class DiscoveryStep(BaseModel):
+    """A discovery step showing how datasets were found."""
+
+    source: str = Field(..., description="Source name: data.gov.sg, singstat")
+    query: str = Field(..., description="Search query used for discovery")
+    notes: str = Field(default="", description="Additional notes about the discovery")
 
 
 class ExtractionStep(BaseModel):
@@ -92,6 +111,9 @@ class Plan(BaseModel):
 
     intent: Intent = Field(..., description="Structured user intent")
     sources: List[DataSource] = Field(..., description="Data sources to use")
+    discovery_steps: List[DiscoveryStep] = Field(
+        default_factory=list, description="Discovery steps showing how datasets were found"
+    )
     extract_steps: List[ExtractionStep] = Field(..., description="Extraction steps")
     analysis_steps: List[AnalysisStep] = Field(..., description="Analysis steps")
     guardrails: Guardrails = Field(
@@ -111,14 +133,28 @@ class Plan(BaseModel):
                 "sources": [
                     {
                         "name": "singstat",
-                        "datasets": ["employment_by_industry"],
+                        "datasets": [
+                            {
+                                "id": "M182931",
+                                "title": "Employed Residents By Industry",
+                                "score": 0.85,
+                                "discovered_by": "singstat_discovery",
+                            }
+                        ],
                         "format": "api",
+                    }
+                ],
+                "discovery_steps": [
+                    {
+                        "source": "singstat",
+                        "query": "employment industry tech",
+                        "notes": "Searching for employment statistics by industry sector",
                     }
                 ],
                 "extract_steps": [
                     {
                         "source": "singstat",
-                        "dataset_ref": "employment_by_industry_2018_2023",
+                        "dataset_ref": "M182931",
                         "notes": "Primary employment data for tech sector",
                     }
                 ],

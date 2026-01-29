@@ -59,16 +59,27 @@ From the agreed structure:
 * `run_id`
 * `query_text`
 * optional `user_constraints` (sources allowed, timeframe, etc.)
+* optional `discovery_hints` (keywords, entities, metrics)
 
 **Outputs**
 
 * `plan` (JSON) suitable for approval + execution
+* `discovery_results` (dataset candidates per connector, metadata only)
 * ReAct events for transparency
 
 **Authority boundaries**
 
+* May invoke **connector discovery** (metadata search only) to identify datasets
 * May *propose* sources/tools; may not execute extraction/analytics directly
 * Must stop after `plan` creation until `approved=true`
+
+**Planning sequence (no execution)**
+
+1. Interpret intent (entities, metrics, time range, constraints)
+2. Run dataset discovery on **data.gov.sg** and **SingStat** connectors
+3. Select best-fit dataset(s) based on relevance and constraints
+4. Build extract + analysis steps using **discovered** dataset IDs (no hard-coded IDs)
+5. Emit plan and wait for approval
 
 ---
 
@@ -80,6 +91,7 @@ From the agreed structure:
 
 * `run_id`
 * `approved_plan.extract_steps[]`
+* `approved_plan.sources[].datasets[]` (must be discovered via coordinator)
 
 **Outputs**
 
@@ -146,7 +158,16 @@ From the agreed structure:
     "metrics": ["string"]
   },
   "sources": [
-    { "name": "data_gov_sg|singstat|mock_internal", "datasets": ["string"], "format": "api|csv|excel|json" }
+    {
+      "name": "data_gov_sg|singstat|mock_internal",
+      "format": "api|csv|excel|json",
+      "datasets": [
+        { "id": "string", "title": "string", "score": 0.0, "discovered_by": "string" }
+      ]
+    }
+  ],
+  "discovery_steps": [
+    { "source": "data_gov_sg|singstat", "query": "string", "notes": "string" }
   ],
   "extract_steps": [
     { "source": "string", "dataset_ref": "string", "notes": "string" }

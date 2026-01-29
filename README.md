@@ -43,11 +43,10 @@ docker-compose up -d
 
 This starts: PostgreSQL, Redis, Backend API with agents, and Frontend UI.
 
-### Step 4: Run the Demo
+### Step 4: Enjoy
 
-```cmd
-docker-compose exec api python demo_agents.py
-```
+Navigate to http://localhost:3000 
+
 
 ---
 

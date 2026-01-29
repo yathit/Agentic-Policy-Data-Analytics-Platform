@@ -9,11 +9,8 @@ Responsibilities:
 - Stop at approval gate (HITL)
 """
 
-import json
-import uuid
 from pathlib import Path
 from typing import Dict, Any, Optional
-from datetime import datetime
 
 from app.llm.router import LLMRouter
 from app.schemas.events import AgentEvent, EventPhase, AgentType, event_store
@@ -22,10 +19,15 @@ from app.schemas.plan import (
     Intent,
     TimeRange,
     DataSource,
+    DiscoveredDataset,
+    DiscoveryStep,
     ExtractionStep,
     AnalysisStep,
     Guardrails,
 )
+from app.connectors.singstat import SingStatConnector
+from app.connectors.datagov_v2 import DataGovV2Connector
+from app.connectors.base import DatasetCandidate
 
 
 class CoordinatorAgent:
@@ -47,6 +49,10 @@ class CoordinatorAgent:
         """
         self.llm_router = llm_router or LLMRouter()
         self.system_prompt = self._load_system_prompt()
+        self._connectors = {
+            "singstat": SingStatConnector(),
+            "data.gov.sg": DataGovV2Connector(),
+        }
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from file."""
@@ -82,22 +88,28 @@ class CoordinatorAgent:
         event_store.emit(event)
 
     def interpret_query(
-        self, run_id: str, query_text: str, user_constraints: Optional[Dict[str, Any]] = None
+        self,
+        run_id: str,
+        query_text: str,
+        user_constraints: Optional[Dict[str, Any]] = None,
+        discovery_hints: Optional[Dict[str, Any]] = None,
     ) -> Plan:
         """
         Interpret user query and generate execution plan.
 
         Steps:
         1. Parse intent (entities, metrics, time range)
-        2. Identify candidate data sources
-        3. Propose extraction steps
-        4. Propose analysis steps
-        5. Return plan (not approved yet)
+        2. Run dataset discovery on connectors
+        3. Select best-fit datasets based on relevance
+        4. Propose extraction steps using discovered dataset IDs
+        5. Propose analysis steps
+        6. Return plan (not approved yet)
 
         Args:
             run_id: Unique run identifier
             query_text: User's natural language query
             user_constraints: Optional constraints (allowed sources, time limits, etc)
+            discovery_hints: Optional hints for discovery (keywords, entities, metrics)
 
         Returns:
             Proposed Plan (approved=False)
@@ -106,7 +118,7 @@ class CoordinatorAgent:
             run_id,
             EventPhase.REASON,
             f"Interpreting user query: '{query_text}'",
-            {"query": query_text, "constraints": user_constraints},
+            {"query": query_text, "constraints": user_constraints, "hints": discovery_hints},
         )
 
         # Step 1: Parse intent
@@ -119,26 +131,39 @@ class CoordinatorAgent:
             {"intent": intent.model_dump()},
         )
 
-        # Step 2: Propose data sources
-        sources = self._propose_sources(run_id, intent, user_constraints)
+        # Step 2: Run dataset discovery
+        discovery_results, discovery_steps = self._run_discovery(
+            run_id, intent, user_constraints, discovery_hints
+        )
+
+        self._emit_event(
+            run_id,
+            EventPhase.OBSERVATION,
+            f"Discovery completed: found {sum(len(ds) for ds in discovery_results.values())} datasets",
+            {"discovery_results": {k: len(v) for k, v in discovery_results.items()}},
+        )
+
+        # Step 3: Select best-fit datasets and create sources
+        sources = self._select_datasets(run_id, intent, discovery_results, user_constraints)
 
         self._emit_event(
             run_id,
             EventPhase.ACTION,
-            f"Proposing {len(sources)} data sources",
+            f"Selected {len(sources)} data sources with discovered datasets",
             {"sources": [s.model_dump() for s in sources]},
         )
 
-        # Step 3: Create extraction steps
+        # Step 4: Create extraction steps from discovered datasets
         extract_steps = self._create_extraction_steps(run_id, intent, sources)
 
-        # Step 4: Create analysis steps
+        # Step 5: Create analysis steps
         analysis_steps = self._create_analysis_steps(run_id, intent)
 
-        # Step 5: Assemble plan
+        # Step 6: Assemble plan
         plan = Plan(
             intent=intent,
             sources=sources,
+            discovery_steps=discovery_steps,
             extract_steps=extract_steps,
             analysis_steps=analysis_steps,
             guardrails=Guardrails(),
@@ -234,69 +259,238 @@ Respond with JSON:
                 metrics=[],
             )
 
-    def _propose_sources(
-        self, run_id: str, intent: Intent, user_constraints: Optional[Dict[str, Any]]
-    ) -> list[DataSource]:
+    def _build_discovery_query(
+        self, intent: Intent, discovery_hints: Optional[Dict[str, Any]] = None
+    ) -> str:
         """
-        Propose data sources based on intent.
+        Build discovery query from intent and hints.
+
+        Args:
+            intent: Parsed intent
+            discovery_hints: Optional discovery hints
+
+        Returns:
+            Search query string
+        """
+        query_parts = []
+
+        # Add entities from intent
+        if intent.entities:
+            query_parts.extend(intent.entities[:3])
+
+        # Add metrics from intent
+        if intent.metrics:
+            query_parts.extend(intent.metrics[:2])
+
+        # Add hints if provided
+        if discovery_hints:
+            if "keywords" in discovery_hints:
+                query_parts.extend(discovery_hints["keywords"][:3])
+            if "entities" in discovery_hints:
+                query_parts.extend(discovery_hints["entities"][:2])
+
+        # Fallback: extract key terms from question
+        if not query_parts:
+            words = intent.question.lower().split()
+            stop_words = {"what", "how", "the", "is", "are", "has", "have", "been", "in", "of", "to", "from", "a", "an"}
+            query_parts = [w for w in words if w not in stop_words and len(w) > 2][:4]
+
+        return " ".join(query_parts)
+
+    def _run_discovery(
+        self,
+        run_id: str,
+        intent: Intent,
+        user_constraints: Optional[Dict[str, Any]] = None,
+        discovery_hints: Optional[Dict[str, Any]] = None,
+    ) -> tuple[Dict[str, list[DatasetCandidate]], list[DiscoveryStep]]:
+        """
+        Run dataset discovery on configured connectors.
 
         Args:
             run_id: Run identifier
             intent: Parsed intent
             user_constraints: Optional constraints
+            discovery_hints: Optional discovery hints
 
         Returns:
-            List of proposed data sources
+            Tuple of (discovery_results by source, discovery_steps)
         """
-        # For Singapore policy data, default sources
-        allowed_sources = ["data.gov.sg", "singstat", "internal"]
+        discovery_results: Dict[str, list[DatasetCandidate]] = {}
+        discovery_steps: list[DiscoveryStep] = []
 
+        # Determine which sources to query
+        allowed_sources = ["singstat", "data.gov.sg"]
         if user_constraints and "allowed_sources" in user_constraints:
             allowed_sources = user_constraints["allowed_sources"]
 
-        # Simple heuristic: propose based on entities and metrics
+        # Build discovery query
+        query = self._build_discovery_query(intent, discovery_hints)
+
+        self._emit_event(
+            run_id,
+            EventPhase.ACTION,
+            f"Running dataset discovery with query: '{query}'",
+            {"query": query, "sources": allowed_sources},
+        )
+
+        # Run discovery on each connector
+        for source_name in allowed_sources:
+            connector = self._connectors.get(source_name)
+            if not connector:
+                continue
+
+            try:
+                self._emit_event(
+                    run_id,
+                    EventPhase.ACTION,
+                    f"Discovering datasets from {source_name}",
+                    {"source": source_name, "query": query},
+                )
+
+                candidates = connector.discover(query)
+                discovery_results[source_name] = candidates
+
+                # Record discovery step
+                discovery_steps.append(
+                    DiscoveryStep(
+                        source=source_name,
+                        query=query,
+                        notes=f"Found {len(candidates)} candidate datasets",
+                    )
+                )
+
+                self._emit_event(
+                    run_id,
+                    EventPhase.OBSERVATION,
+                    f"Found {len(candidates)} datasets from {source_name}",
+                    {
+                        "source": source_name,
+                        "count": len(candidates),
+                        "datasets": [
+                            {"id": c.uri, "name": c.name} for c in candidates[:5]
+                        ],
+                    },
+                )
+
+            except Exception as e:
+                self._emit_event(
+                    run_id,
+                    EventPhase.OBSERVATION,
+                    f"Discovery failed for {source_name}: {str(e)}",
+                    {"source": source_name, "error": str(e)},
+                )
+                discovery_results[source_name] = []
+
+        return discovery_results, discovery_steps
+
+    def _select_datasets(
+        self,
+        run_id: str,
+        intent: Intent,
+        discovery_results: Dict[str, list[DatasetCandidate]],
+        user_constraints: Optional[Dict[str, Any]] = None,
+    ) -> list[DataSource]:
+        """
+        Select best-fit datasets from discovery results.
+
+        Args:
+            run_id: Run identifier
+            intent: Parsed intent
+            discovery_results: Discovery results by source
+            user_constraints: Optional constraints
+
+        Returns:
+            List of DataSource with discovered datasets
+        """
         sources = []
+        max_datasets_per_source = 3
 
-        # Singstat for employment, demographics, economic data
-        if any(m in ["employment", "population", "gdp", "economic"] for m in intent.metrics):
-            sources.append(
-                DataSource(
-                    name="singstat",
-                    datasets=["employment_by_industry", "economic_indicators"],
-                    format="api",
-                )
-            )
+        for source_name, candidates in discovery_results.items():
+            if not candidates:
+                continue
 
-        # data.gov.sg for tech sector, government programs
-        if any(e in ["tech", "technology", "innovation"] for e in intent.entities):
-            sources.append(
-                DataSource(
-                    name="data.gov.sg",
-                    datasets=["tech_sector_statistics", "innovation_metrics"],
-                    format="api",
-                )
-            )
+            # Score and select top candidates
+            scored_datasets = []
+            for candidate in candidates:
+                score = self._score_dataset(candidate, intent)
+                scored_datasets.append((candidate, score))
 
-        # Default to internal mock if no matches
-        if not sources:
-            sources.append(
-                DataSource(
-                    name="internal", datasets=["table:digital_sector_employment"], format="database"
+            # Sort by score descending
+            scored_datasets.sort(key=lambda x: x[1], reverse=True)
+
+            # Select top datasets
+            selected = scored_datasets[:max_datasets_per_source]
+
+            datasets = [
+                DiscoveredDataset(
+                    id=candidate.uri,
+                    title=candidate.name,
+                    score=round(score, 2),
+                    discovered_by=f"{source_name}_discovery",
                 )
-            )
+                for candidate, score in selected
+            ]
+
+            if datasets:
+                sources.append(
+                    DataSource(
+                        name=source_name,
+                        datasets=datasets,
+                        format="api",
+                    )
+                )
 
         return sources
+
+    def _score_dataset(self, candidate: DatasetCandidate, intent: Intent) -> float:
+        """
+        Score a dataset candidate based on relevance to intent.
+
+        Args:
+            candidate: Dataset candidate
+            intent: Parsed intent
+
+        Returns:
+            Relevance score (0-1)
+        """
+        score = 0.0
+        name_lower = candidate.name.lower()
+        desc_lower = candidate.description.lower()
+
+        # Check entity matches
+        for entity in intent.entities:
+            entity_lower = entity.lower()
+            if entity_lower in name_lower:
+                score += 0.3
+            elif entity_lower in desc_lower:
+                score += 0.15
+
+        # Check metric matches
+        for metric in intent.metrics:
+            metric_lower = metric.lower()
+            if metric_lower in name_lower:
+                score += 0.25
+            elif metric_lower in desc_lower:
+                score += 0.1
+
+        # Bonus for time series data
+        if candidate.metadata.get("is_time_series"):
+            score += 0.1
+
+        # Cap at 1.0
+        return min(score, 1.0)
 
     def _create_extraction_steps(
         self, run_id: str, intent: Intent, sources: list[DataSource]
     ) -> list[ExtractionStep]:
         """
-        Create extraction steps from proposed sources.
+        Create extraction steps from discovered datasets.
 
         Args:
             run_id: Run identifier
             intent: Parsed intent
-            sources: Proposed sources
+            sources: Data sources with discovered datasets
 
         Returns:
             List of extraction steps
@@ -308,8 +502,8 @@ Respond with JSON:
                 steps.append(
                     ExtractionStep(
                         source=source.name,
-                        dataset_ref=dataset,
-                        notes=f"Extract {dataset} for {intent.question}",
+                        dataset_ref=dataset.id,
+                        notes=f"Extract '{dataset.title}' (score: {dataset.score}) for: {intent.question[:50]}",
                     )
                 )
 
