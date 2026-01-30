@@ -10,7 +10,7 @@ Responsibilities:
 """
 
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 
 from sqlalchemy.orm import Session
 
@@ -42,16 +42,23 @@ class CoordinatorAgent:
     - Waits for approval before proceeding
     """
 
-    def __init__(self, llm_router: Optional[LLMRouter] = None, db: Optional[Session] = None):
+    def __init__(
+        self,
+        llm_router: Optional[LLMRouter] = None,
+        db: Optional[Session] = None,
+        event_sink: Optional[Callable[[AgentEvent], None]] = None,
+    ):
         """
         Initialize Coordinator Agent.
 
         Args:
             llm_router: LLM router for API calls (creates default if None)
             db: Database session for discovery queries
+            event_sink: Optional callback for event persistence (uses in-memory store if None)
         """
         self.llm_router = llm_router or LLMRouter()
         self.db = db
+        self.event_sink = event_sink
         self.system_prompt = self._load_system_prompt()
         self._connectors = {
             "singstat": SingStatConnector(),
@@ -89,7 +96,10 @@ class CoordinatorAgent:
             message=message,
             payload=payload or {},
         )
-        event_store.emit(event)
+        if self.event_sink:
+            self.event_sink(event)
+        else:
+            event_store.emit(event)
 
     def interpret_query(
         self,

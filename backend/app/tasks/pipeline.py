@@ -4,69 +4,16 @@ Background task for running the analytics pipeline.
 
 import uuid
 from datetime import datetime
-from typing import Optional, Callable
+from typing import Optional
 
 from app.core.celery_app import celery_app
 from app.core.database import SessionLocal
-from app.models import Run, RunStatus, Event, Artifact
+from app.models import Run, RunStatus, Artifact
 from app.schemas.plan import Plan as StructuredPlan, TimeRange
-from app.schemas.events import AgentEvent
 from app.agents.extraction import ExtractionAgent
 from app.agents.analytics import AnalyticsAgent
-
-
-def emit_event(
-    db,
-    run_id: uuid.UUID,
-    agent: str,
-    phase: str,
-    message: str,
-    payload: Optional[dict] = None,
-) -> Event:
-    """Create and persist an event."""
-    event = Event(
-        run_id=run_id,
-        agent=agent,
-        phase=phase,
-        message=message,
-        payload=payload or {},
-    )
-    db.add(event)
-    db.commit()
-    db.refresh(event)
-    return event
-
-
-def _normalize_sources(sources: Optional[list]) -> list:
-    if not sources:
-        return ["data.gov.sg", "singstat"]
-    normalized = []
-    for source in sources:
-        if source in ["data_gov_sg", "data.gov.sg"]:
-            normalized.append("data.gov.sg")
-        elif source in ["singstat"]:
-            normalized.append("singstat")
-        elif source in ["internal", "mock_internal"]:
-            normalized.append("internal")
-        else:
-            normalized.append(source)
-    return normalized
-
-
-def _db_event_sink(db, run_uuid: uuid.UUID) -> Callable[[AgentEvent], None]:
-    def _sink(event: AgentEvent) -> None:
-        agent = event.agent.value if hasattr(event.agent, "value") else event.agent
-        phase = event.phase.value if hasattr(event.phase, "value") else event.phase
-        emit_event(
-            db,
-            run_uuid,
-            agent=str(agent),
-            phase=str(phase),
-            message=event.message,
-            payload=event.payload,
-        )
-
-    return _sink
+from app.agents.events import create_db_event_sink, emit_db_event
+from app.utils.sources import normalize_sources
 
 
 def _apply_plan_edits(plan: StructuredPlan, edits: Optional[dict]) -> StructuredPlan:
@@ -77,7 +24,7 @@ def _apply_plan_edits(plan: StructuredPlan, edits: Optional[dict]) -> Structured
     time_range = edits.get("time_range")
 
     if sources:
-        allowed = set(_normalize_sources(sources))
+        allowed = set(normalize_sources(sources))
         plan.sources = [s for s in plan.sources if s.name in allowed]
         plan.extract_steps = [s for s in plan.extract_steps if s.source in allowed]
 
@@ -216,7 +163,7 @@ def run_pipeline(self, run_id: str):
         db.commit()
 
         # Emit started event
-        emit_event(
+        emit_db_event(
             db,
             run_uuid,
             agent="coordinator",
@@ -241,11 +188,11 @@ def run_pipeline(self, run_id: str):
                 f"or entities (e.g., 'tech', 'technology', 'innovation')."
             )
 
-        selected_sources = _normalize_sources([s.name for s in structured_plan.sources])
+        selected_sources = normalize_sources([s.name for s in structured_plan.sources])
         run.selected_sources = selected_sources
         db.commit()
 
-        event_sink = _db_event_sink(db, run_uuid)
+        event_sink = create_db_event_sink(db, run_uuid)
 
         extraction_agent = ExtractionAgent(db, event_sink=event_sink)
         extraction_results = extraction_agent.run_extraction(
@@ -298,7 +245,7 @@ def run_pipeline(self, run_id: str):
         db.add(artifact)
         db.commit()
 
-        emit_event(
+        emit_db_event(
             db,
             run_uuid,
             agent="report",
@@ -324,7 +271,7 @@ def run_pipeline(self, run_id: str):
                 run.error_summary = str(e)[:500]  # Limit error message length
                 db.commit()
 
-                emit_event(
+                emit_db_event(
                     db,
                     uuid.UUID(run_id),
                     agent="coordinator",

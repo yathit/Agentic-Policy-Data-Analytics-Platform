@@ -12,7 +12,7 @@ Implements bounded autonomy with human-in-the-loop approval.
 """
 
 import uuid
-from typing import Dict, Any, Optional, TypedDict, Annotated
+from typing import Dict, Any, Optional, TypedDict, Callable
 from sqlalchemy.orm import Session
 
 from langgraph.graph import StateGraph, END
@@ -21,7 +21,9 @@ from langgraph.checkpoint.memory import MemorySaver
 from app.agents.coordinator import CoordinatorAgent
 from app.agents.extraction import ExtractionAgent
 from app.agents.analytics import AnalyticsAgent
+from app.agents.events import create_db_event_sink
 from app.llm.router import LLMRouter
+from app.models import Event
 from app.schemas.plan import Plan, PlanApprovalRequest
 from app.schemas.events import event_store, EventPhase, AgentType, AgentEvent
 
@@ -51,23 +53,36 @@ class AgentOrchestrator:
     - Stateful execution with checkpoints
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, use_db_events: bool = True):
         """
         Initialize orchestrator.
 
         Args:
             db: Database session
+            use_db_events: If True, persist events to DB; if False, use in-memory store
         """
         self.db = db
+        self.use_db_events = use_db_events
         self.llm_router = LLMRouter()
+        self._run_id: Optional[str] = None
+        self._event_sink: Optional[Callable] = None
 
-        # Initialize agents
-        self.coordinator = CoordinatorAgent(self.llm_router, db=db)
-        self.extraction = ExtractionAgent(db)
-        self.analytics = AnalyticsAgent(db, self.llm_router)
-
-        # Build graph
+        # Build graph (agents initialized per-run to support event sink)
         self.graph = self._build_graph()
+
+    def _get_event_sink(self, run_id: str) -> Optional[Callable]:
+        """Get event sink for the current run."""
+        if self.use_db_events and run_id:
+            return create_db_event_sink(self.db, uuid.UUID(run_id))
+        return None
+
+    def _init_agents(self, run_id: str):
+        """Initialize agents with event sink for the run."""
+        self._run_id = run_id
+        self._event_sink = self._get_event_sink(run_id)
+        self.coordinator = CoordinatorAgent(self.llm_router, db=self.db, event_sink=self._event_sink)
+        self.extraction = ExtractionAgent(self.db, event_sink=self._event_sink)
+        self.analytics = AnalyticsAgent(self.db, self.llm_router, event_sink=self._event_sink)
 
     def _build_graph(self) -> StateGraph:
         """
@@ -156,7 +171,10 @@ class AgentOrchestrator:
             message="Plan ready, awaiting user approval",
             payload={"plan": state["plan"].model_dump() if state["plan"] else None},
         )
-        event_store.emit(event)
+        if self._event_sink:
+            self._event_sink(event)
+        else:
+            event_store.emit(event)
 
         return state
 
@@ -253,15 +271,25 @@ class AgentOrchestrator:
                 else:
                     extraction_summary.append({"success": False, "error": result.error})
 
+        # Get events from DB or in-memory store
+        if self.use_db_events:
+            db_events = self.db.query(Event).filter(
+                Event.run_id == uuid.UUID(state["run_id"])
+            ).order_by(Event.ts.asc()).all()
+            events_list = [
+                {"agent": e.agent, "phase": e.phase, "message": e.message, "payload": e.payload, "ts": e.ts.isoformat()}
+                for e in db_events
+            ]
+        else:
+            events_list = [e.model_dump() for e in event_store.get_events(state["run_id"])]
+
         state["final_output"] = {
             "run_id": state["run_id"],
             "query": state["query"],
             "plan": state["plan"].model_dump() if state["plan"] else None,
             "extraction_summary": extraction_summary,
             "analytics": state.get("analytics_results"),
-            "events": [
-                e.model_dump() for e in event_store.get_events(state["run_id"])
-            ],
+            "events": events_list,
             "error": state.get("error"),
         }
 
@@ -290,6 +318,9 @@ class AgentOrchestrator:
         if not run_id:
             run_id = str(uuid.uuid4())
 
+        # Initialize agents with event sink for this run
+        self._init_agents(run_id)
+
         initial_state: AgentState = {
             "run_id": run_id,
             "query": query,
@@ -316,28 +347,55 @@ class AgentOrchestrator:
             run_id: Run identifier
             approved: Whether to approve the plan
         """
+        # Ensure agents are initialized for this run
+        if self._run_id != run_id:
+            self._init_agents(run_id)
+
         # Get events to find plan
-        events = event_store.get_events(run_id, agent=AgentType.COORDINATOR)
+        if self.use_db_events:
+            db_events = self.db.query(Event).filter(
+                Event.run_id == uuid.UUID(run_id),
+                Event.agent == "coordinator"
+            ).order_by(Event.ts.desc()).all()
 
-        for event in reversed(events):
-            if event.phase == EventPhase.DECISION and "plan" in event.payload:
-                plan_dict = event.payload["plan"]
-                plan = Plan(**plan_dict)
-                plan.approved = approved
+            for db_event in db_events:
+                if db_event.phase == "decision" and db_event.payload and "plan" in db_event.payload:
+                    plan_dict = db_event.payload["plan"]
+                    plan = Plan(**plan_dict)
+                    plan.approved = approved
 
-                # Update event payload
-                event.payload["plan"] = plan.model_dump()
+                    # Emit approval event
+                    approval_event = AgentEvent(
+                        run_id=run_id,
+                        agent=AgentType.COORDINATOR,
+                        phase=EventPhase.DECISION,
+                        message=f"Plan {'approved' if approved else 'rejected'} by user",
+                        payload={"approved": approved, "plan": plan.model_dump()},
+                    )
+                    if self._event_sink:
+                        self._event_sink(approval_event)
+                    break
+        else:
+            events = event_store.get_events(run_id, agent=AgentType.COORDINATOR)
+            for event in reversed(events):
+                if event.phase == EventPhase.DECISION and "plan" in event.payload:
+                    plan_dict = event.payload["plan"]
+                    plan = Plan(**plan_dict)
+                    plan.approved = approved
 
-                # Re-emit approval event
-                approval_event = AgentEvent(
-                    run_id=run_id,
-                    agent=AgentType.COORDINATOR,
-                    phase=EventPhase.DECISION,
-                    message=f"Plan {'approved' if approved else 'rejected'} by user",
-                    payload={"approved": approved, "plan": plan.model_dump()},
-                )
-                event_store.emit(approval_event)
-                break
+                    # Update event payload
+                    event.payload["plan"] = plan.model_dump()
+
+                    # Re-emit approval event
+                    approval_event = AgentEvent(
+                        run_id=run_id,
+                        agent=AgentType.COORDINATOR,
+                        phase=EventPhase.DECISION,
+                        message=f"Plan {'approved' if approved else 'rejected'} by user",
+                        payload={"approved": approved, "plan": plan.model_dump()},
+                    )
+                    event_store.emit(approval_event)
+                    break
 
     def continue_after_approval(self, run_id: str) -> Dict[str, Any]:
         """
@@ -349,14 +407,28 @@ class AgentOrchestrator:
         Returns:
             Final output
         """
-        # Get current state from events
-        events = event_store.get_events(run_id, agent=AgentType.COORDINATOR)
+        # Ensure agents are initialized for this run
+        if self._run_id != run_id:
+            self._init_agents(run_id)
 
+        # Get current state from events
         plan = None
-        for event in reversed(events):
-            if "plan" in event.payload and event.payload.get("approved"):
-                plan = Plan(**event.payload["plan"])
-                break
+        if self.use_db_events:
+            db_events = self.db.query(Event).filter(
+                Event.run_id == uuid.UUID(run_id),
+                Event.agent == "coordinator"
+            ).order_by(Event.ts.desc()).all()
+
+            for db_event in db_events:
+                if db_event.payload and "plan" in db_event.payload and db_event.payload.get("approved"):
+                    plan = Plan(**db_event.payload["plan"])
+                    break
+        else:
+            events = event_store.get_events(run_id, agent=AgentType.COORDINATOR)
+            for event in reversed(events):
+                if "plan" in event.payload and event.payload.get("approved"):
+                    plan = Plan(**event.payload["plan"])
+                    break
 
         if not plan or not plan.approved:
             raise ValueError("Plan not approved")

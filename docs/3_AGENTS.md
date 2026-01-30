@@ -565,6 +565,10 @@ Common issues:
 
 **For more troubleshooting, see [DOCKER_QUICKSTART.md](../DOCKER_QUICKSTART.md)**
 
+Run the demo query with
+
+    docker-compose -f infra/docker-compose.yml exec api python demo_agents.py 
+
 ### Expected Output
 
 ```
