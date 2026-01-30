@@ -5,13 +5,12 @@ Uses cached collections for discovery and V2 API for data fetching.
 Uses list-rows API for paginated data access.
 """
 
-import re
 import requests
 import pandas as pd
 import io
 import time
 import logging
-from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 from datetime import datetime
 
@@ -89,7 +88,7 @@ class DataGovV2Connector(BaseConnector):
             return []
 
         # Extract individual keywords from the intent
-        keywords = self._extract_keywords(intent)
+        keywords = self.extract_keywords(intent)
 
         if not keywords:
             logger.warning("No valid keywords extracted from intent: %s", intent)
@@ -150,95 +149,6 @@ class DataGovV2Connector(BaseConnector):
             keywords,
         )
         return candidates
-
-    def _extract_keywords(self, intent: str, max_keywords: int = 5) -> List[str]:
-        """
-        Extract searchable keywords from a multi-word intent.
-
-        Filters out common stop words and short words, then sorts by
-        importance (metrics and domain terms first).
-
-        Args:
-            intent: The search query or intent string
-            max_keywords: Maximum number of keywords to return (default: 5)
-
-        Returns:
-            List of individual keywords to search, sorted by importance
-        """
-        # Common stop words to filter out
-        stop_words = {
-            "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-            "of", "with", "by", "from", "as", "is", "was", "are", "were", "be",
-            "been", "being", "have", "has", "had", "do", "does", "did", "will",
-            "would", "could", "should", "may", "might", "must", "shall", "can",
-            "this", "that", "these", "those", "what", "which", "who", "whom",
-            "how", "when", "where", "why", "all", "each", "every", "both",
-            "few", "more", "most", "other", "some", "such", "no", "nor", "not",
-            "only", "own", "same", "so", "than", "too", "very", "just", "also",
-            "now", "here", "there", "then", "once", "if", "into", "through",
-            "during", "before", "after", "above", "below", "between", "under",
-            "again", "further", "then", "once", "its", "their", "our", "your",
-            "trend", "trends", "data", "statistics", "analysis", "sector",
-            "singapore", "singaporean", "sg",
-        }
-
-        # High-priority keywords (metrics and common statistical terms)
-        high_priority = {
-            "employment", "unemployment", "gdp", "population", "income",
-            "wage", "wages", "salary", "salaries", "trade", "export", "exports",
-            "import", "imports", "inflation", "cpi", "housing", "hdb",
-            "birth", "death", "marriage", "divorce", "education", "health",
-            "healthcare", "tourism", "tourist", "retail", "manufacturing",
-            "construction", "finance", "banking", "insurance", "transport",
-            "technology", "tech", "digital", "ict", "innovation",
-            "productivity", "labour", "labor", "workforce", "jobs",
-            "business", "enterprise", "sme", "startup", "investment",
-        }
-
-        # Medium-priority keywords (domain/sector terms)
-        medium_priority = {
-            "annual", "monthly", "quarterly", "yearly",
-            "resident", "citizen", "foreigner", "permanent",
-            "private", "public", "government", "commercial",
-            "industrial", "services", "goods",
-        }
-
-        # Split by non-alphanumeric characters
-        words = re.split(r'[^a-zA-Z0-9]+', intent.lower())
-
-        # Filter and score keywords
-        scored_keywords: List[Tuple[str, int]] = []
-        seen = set()
-
-        for word in words:
-            word = word.strip()
-            if not word or word in stop_words or word in seen:
-                continue
-
-            # Keep words that are at least 3 chars (or 2 if numeric like year)
-            if len(word) < 3 and not (len(word) >= 2 and word.isdigit()):
-                continue
-
-            seen.add(word)
-
-            # Assign priority score (higher = more important)
-            if word in high_priority:
-                score = 3
-            elif word in medium_priority:
-                score = 2
-            elif word.isdigit() and len(word) == 4:
-                # Years are useful but lower priority
-                score = 1
-            else:
-                score = 0
-
-            scored_keywords.append((word, score))
-
-        # Sort by score (descending), then by original order for ties
-        scored_keywords.sort(key=lambda x: -x[1])
-
-        # Return top keywords
-        return [kw for kw, _ in scored_keywords[:max_keywords]]
 
     def fetch(self, dataset_ref: str) -> bytes:
         """
