@@ -85,6 +85,48 @@ Or open http://localhost:8000/docs and try the interactive API.
 
 Open http://localhost:3000 in your browser
 
+## Debugging demo_agents.py in VSCode (Docker)
+
+Use this when you want breakpoints and variable inspection inside the container.
+
+### 1. Rebuild the API image
+
+```cmd
+docker-compose up -d --build api
+```
+
+### 2. Start demo_agents.py under debugpy
+
+```cmd
+docker-compose down api
+docker-compose run --rm --service-ports api python -m debugpy --listen 0.0.0.0:5678 --wait-for-client /app/demo_agents.py
+```
+
+### 3. Attach the VSCode debugger
+
+Open the Run and Debug panel and choose "Attach to api container".
+If you need to create the config, add this to `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Attach to api container",
+      "type": "python",
+      "request": "attach",
+      "connect": { "host": "localhost", "port": 5678 },
+      "pathMappings": [
+        { "localRoot": "${workspaceFolder}/backend", "remoteRoot": "/app" }
+      ],
+      "justMyCode": false
+    }
+  ]
+}
+```
+
+Set breakpoints in `backend/demo_agents.py`, then start debugging in VSCode.
+
 ## Common Commands
 
 ### View Logs

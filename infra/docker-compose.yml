@@ -54,6 +54,7 @@ services:
       DATA_GOV_SG_API_KEY: ${DATA_GOV_SG_API_KEY}
     ports:
       - "8000:8000"
+      - "5678:5678"
     volumes:
       - ../backend/app:/app/app
       - ../.llm:/app/.llm
