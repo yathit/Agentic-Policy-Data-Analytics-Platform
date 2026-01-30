@@ -225,8 +225,9 @@ class AnalyticsAgent:
         if not datasets:
             return None
 
-        # Get first dataset (in real implementation, would match by name)
-        dataset = datasets[0]
+        dataset = self._select_dataset_for_step(run_id, datasets, step)
+        if not dataset:
+            return None
 
         df = self._load_dataset_dataframe(run_id, dataset)
         if df is None or df.empty:
@@ -329,6 +330,49 @@ class AnalyticsAgent:
         )
 
         return {"table": table, "chart": chart, "insight": insight}
+
+    def _select_dataset_for_step(
+        self,
+        run_id: str,
+        datasets: List[Dataset],
+        step: AnalysisStep,
+    ) -> Optional[Dataset]:
+        """
+        Select the most appropriate dataset for a given analysis step.
+
+        Uses dataset_ref/source if provided, otherwise falls back to the first dataset.
+        """
+        if not datasets:
+            return None
+
+        target_ref = (step.dataset_ref or "").strip() if hasattr(step, "dataset_ref") else ""
+        target_source = (step.source or "").strip() if hasattr(step, "source") else ""
+
+        if target_ref or target_source:
+            for dataset in datasets:
+                if target_source and dataset.source_type != target_source:
+                    continue
+
+                if target_ref:
+                    extracted = self._extract_dataset_ref(dataset)
+                    if extracted == target_ref:
+                        return dataset
+                    if dataset.name == target_ref:
+                        return dataset
+                    if dataset.provenance and dataset.provenance.source_uri:
+                        if target_ref in dataset.provenance.source_uri:
+                            return dataset
+                else:
+                    return dataset
+
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "No dataset matched analysis step reference; falling back to first dataset",
+                {"dataset_ref": target_ref, "source": target_source},
+            )
+
+        return datasets[0]
 
     def _load_dataset_dataframe(self, run_id: str, dataset: Dataset) -> Optional[pd.DataFrame]:
         """

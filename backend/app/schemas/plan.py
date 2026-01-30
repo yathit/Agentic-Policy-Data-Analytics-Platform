@@ -82,6 +82,12 @@ class AnalysisStep(BaseModel):
     type: str = Field(
         ..., description="Analysis type: trend, yoy, breakdown, correlation"
     )
+    dataset_ref: Optional[str] = Field(
+        default=None, description="Dataset reference to analyze (URI, ID, etc)"
+    )
+    source: Optional[str] = Field(
+        default=None, description="Source name for the dataset (e.g., data.gov.sg, singstat)"
+    )
     params: Dict[str, Any] = Field(
         default_factory=dict, description="Analysis parameters (metric, group_by, etc)"
     )
@@ -161,6 +167,8 @@ class Plan(BaseModel):
                 "analysis_steps": [
                     {
                         "type": "trend",
+                        "dataset_ref": "M182931",
+                        "source": "singstat",
                         "params": {
                             "metric": "employment_count",
                             "group_by": "year",
