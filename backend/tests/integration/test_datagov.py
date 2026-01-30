@@ -8,7 +8,7 @@ To skip in CI, use: pytest -m "not integration"
 """
 
 import pytest
-from app.connectors.datagov_v2 import DataGovV2Connector
+from app.connectors.datagov import DataGovV2Connector
 from app.core.database import SessionLocal
 from app.services.data_service import DataService
 

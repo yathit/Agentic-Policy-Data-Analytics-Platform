@@ -26,7 +26,7 @@ from app.schemas.plan import (
     Guardrails,
 )
 from app.connectors.singstat import SingStatConnector
-from app.connectors.datagov_v2 import DataGovV2Connector
+from app.connectors.datagov import DataGovV2Connector
 from app.connectors.base import DatasetCandidate
 
 

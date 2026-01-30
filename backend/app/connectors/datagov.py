@@ -10,7 +10,7 @@ import pandas as pd
 import io
 import time
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 from datetime import datetime
 
@@ -20,6 +20,10 @@ from app.connectors.base import (
     QualityReport,
     CleaningResult,
 )
+from app.db.repo_data_gov_sg_collection import search_collections
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -53,21 +57,81 @@ class DataGovV2Connector(BaseConnector):
         self.max_pages = config.get("max_pages", 2) if config else 2
         self.api_key = config.get("api_key") if config else None
 
-    def discover(self, intent: str) -> List[DatasetCandidate]:
+    def discover(
+        self,
+        intent: str,
+        db: Optional["Session"] = None,
+        limit: int = 10,
+    ) -> List[DatasetCandidate]:
         """
-        Discover datasets from cached collections.
+        Discover datasets from cached collections in the database.
 
-        NOTE: Discovery is handled by DataService which queries the
-        data_gov_sg_collection table directly. This method returns
-        empty list for interface compliance.
+        Queries the data_gov_sg_collection table for collections matching
+        the user's intent, then returns individual dataset candidates
+        from each collection's child_dataset_ids.
 
         Args:
-            intent: Search keyword (unused)
+            intent: Search keyword (e.g., "employment statistics")
+            db: SQLAlchemy database session (required for discovery)
+            limit: Maximum number of collections to search (default: 10)
 
         Returns:
-            Empty list - discovery handled externally
+            List of DatasetCandidate objects with uri = dataset_id
         """
-        return []
+        if db is None:
+            logger.warning(
+                "discover() called without db session; returning empty list"
+            )
+            return []
+
+        try:
+            collections = search_collections(db, intent, limit=limit)
+        except Exception as e:
+            logger.error("Error searching data.gov.sg collections: %s", e)
+            return []
+
+        candidates: List[DatasetCandidate] = []
+        seen_dataset_ids: set[str] = set()
+        max_datasets = limit
+
+        for collection in collections:
+            child_ids = collection.get("child_dataset_ids") or []
+            # Take up to 2 datasets per collection to avoid flooding results
+            for dataset_id in child_ids[:2]:
+                if dataset_id in seen_dataset_ids:
+                    continue
+                seen_dataset_ids.add(dataset_id)
+
+                candidates.append(
+                    DatasetCandidate(
+                        name=collection.get("name") or dataset_id,
+                        description=collection.get("description") or "",
+                        source_type="data.gov.sg",
+                        format="api",
+                        uri=dataset_id,
+                        metadata={
+                            "collection_id": collection.get("collection_id"),
+                            "collection_name": collection.get("name"),
+                            "last_updated_at": (
+                                collection.get("lastUpdatedAt").isoformat()
+                                if collection.get("lastUpdatedAt")
+                                else None
+                            ),
+                        },
+                    )
+                )
+
+                if len(seen_dataset_ids) >= max_datasets:
+                    break
+            if len(seen_dataset_ids) >= max_datasets:
+                break
+
+        logger.info(
+            "Discovered %d datasets for intent '%s'",
+            len(candidates),
+            intent,
+        )
+        return candidates
 
     def fetch(self, dataset_ref: str) -> bytes:
         """
