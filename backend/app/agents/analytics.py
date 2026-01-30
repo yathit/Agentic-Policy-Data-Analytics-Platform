@@ -10,6 +10,8 @@ Responsibilities:
 """
 
 import json
+import re
+from urllib.parse import urlparse
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -21,6 +23,8 @@ from app.llm.router import LLMRouter
 from app.schemas.events import AgentEvent, EventPhase, AgentType, event_store
 from app.schemas.plan import Plan, AnalysisStep
 from app.models.dataset import Dataset
+from app.connectors import DataGovV2Connector, SingStatConnector, InternalConnector
+from app.core.config import settings
 
 
 class ComputedTable(BaseModel):
@@ -89,6 +93,11 @@ class AnalyticsAgent:
         self.llm_router = llm_router or LLMRouter()
         self.system_prompt = self._load_system_prompt()
         self.event_sink = event_sink
+        self.connectors = {
+            "data.gov.sg": DataGovV2Connector(config={"api_key": settings.data_gov_sg_api_key}),
+            "singstat": SingStatConnector(),
+            "internal": InternalConnector(),
+        }
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from file."""
@@ -219,10 +228,48 @@ class AnalyticsAgent:
         # Get first dataset (in real implementation, would match by name)
         dataset = datasets[0]
 
-        # Mock computation (in production, would load actual DataFrame)
-        # For demo, create synthetic trend data
-        years = list(range(2019, 2024))
-        values = [100000, 120000, 135000, 140000, 155000]
+        df = self._load_dataset_dataframe(run_id, dataset)
+        if df is None or df.empty:
+            return None
+
+        time_col = self._select_time_column(df)
+        if not time_col:
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "No time column found for trend analysis",
+                {"columns": list(df.columns)},
+            )
+            return None
+
+        metric_param = step.params.get("metric") if step.params else None
+        value_col = self._select_value_column(df, metric_param, time_col)
+        if not value_col:
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "No numeric value column found for trend analysis",
+                {"columns": list(df.columns)},
+            )
+            return None
+
+        series_df = df[[time_col, value_col]].copy()
+        series_df[time_col] = self._normalize_time_to_year(series_df[time_col])
+        series_df[value_col] = pd.to_numeric(series_df[value_col], errors="coerce")
+        series_df = series_df.dropna(subset=[time_col, value_col])
+        series_df = series_df.groupby(time_col, dropna=True)[value_col].mean().sort_index()
+
+        if series_df.empty:
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "No usable time series data after normalization",
+                {"time_col": time_col, "value_col": value_col},
+            )
+            return None
+
+        years = series_df.index.astype(int).tolist()
+        values = series_df.values.tolist()
 
         # Compute statistics
         absolute_change = values[-1] - values[0]
@@ -270,7 +317,7 @@ class AnalyticsAgent:
             run_id,
             dataset,
             evidence={
-                "metric": step.params.get("metric", "employment_count"),
+                "metric": metric_param or value_col,
                 "value_start": values[0],
                 "value_end": values[-1],
                 "absolute_change": absolute_change,
@@ -282,6 +329,125 @@ class AnalyticsAgent:
         )
 
         return {"table": table, "chart": chart, "insight": insight}
+
+    def _load_dataset_dataframe(self, run_id: str, dataset: Dataset) -> Optional[pd.DataFrame]:
+        """
+        Load a dataset into a DataFrame for analysis.
+
+        Uses connectors to refetch the source data based on provenance.
+        """
+        connector = self.connectors.get(dataset.source_type)
+        if not connector:
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                f"No connector available for source type '{dataset.source_type}'",
+                {"source_type": dataset.source_type},
+            )
+            return None
+
+        dataset_ref = self._extract_dataset_ref(dataset)
+        if not dataset_ref:
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "Unable to determine dataset reference for analysis",
+                {"dataset_id": dataset.id, "source_type": dataset.source_type},
+            )
+            return None
+
+        try:
+            if dataset.source_type == "internal":
+                df = connector.fetch_dataframe(dataset_ref.replace("table:", ""))
+            else:
+                raw_bytes = connector.fetch(dataset_ref)
+                format_hint = dataset.format
+                if format_hint in {"unknown", "api", ""}:
+                    format_hint = None
+                df = connector.parse(raw_bytes, format_hint)
+
+            cleaned = connector.clean(df).cleaned_df
+
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                f"Loaded dataset {dataset.id} for analysis",
+                {"rows": len(cleaned), "columns": len(cleaned.columns)},
+            )
+
+            return cleaned
+        except Exception as e:
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                f"Failed to load dataset for analysis: {e}",
+                {"dataset_id": dataset.id, "source_type": dataset.source_type},
+            )
+            return None
+
+    def _extract_dataset_ref(self, dataset: Dataset) -> Optional[str]:
+        """Extract a dataset reference from stored metadata."""
+        if dataset.provenance and dataset.provenance.source_uri:
+            source_uri = dataset.provenance.source_uri
+            if dataset.source_type == "data.gov.sg":
+                match = re.search(r"/datasets/([^/]+)", source_uri)
+                if match:
+                    return match.group(1)
+            if dataset.source_type == "singstat":
+                return urlparse(source_uri).path.rstrip("/").split("/")[-1]
+            return source_uri
+
+        name_prefix = f"{dataset.source_type}_"
+        if dataset.name and dataset.name.startswith(name_prefix):
+            return dataset.name[len(name_prefix):]
+
+        return None
+
+    def _select_time_column(self, df: pd.DataFrame) -> Optional[str]:
+        """Pick a reasonable time column for trend analysis."""
+        preferred = ["year", "period", "date", "time", "month", "quarter"]
+        lower_map = {c.lower(): c for c in df.columns}
+        for key in preferred:
+            if key in lower_map:
+                return lower_map[key]
+
+        for col in df.columns:
+            col_lower = col.lower()
+            if any(k in col_lower for k in preferred):
+                return col
+
+        return None
+
+    def _select_value_column(
+        self, df: pd.DataFrame, metric: Optional[str], time_col: str
+    ) -> Optional[str]:
+        """Pick a numeric value column based on metric or heuristics."""
+        if metric:
+            metric_lower = metric.lower()
+            for col in df.columns:
+                if col.lower() == metric_lower:
+                    return col
+
+        for key in ["value", "count", "total", "amount"]:
+            for col in df.columns:
+                if col.lower() == key:
+                    return col
+
+        numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        if time_col in numeric_cols:
+            numeric_cols = [c for c in numeric_cols if c != time_col]
+
+        return numeric_cols[0] if numeric_cols else None
+
+    def _normalize_time_to_year(self, series: pd.Series) -> pd.Series:
+        """Normalize a time-like series to year integers."""
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return series.dt.year
+
+        if pd.api.types.is_numeric_dtype(series):
+            return series.astype("Int64")
+
+        return pd.to_datetime(series, errors="coerce").dt.year
 
     def _compute_yoy(
         self, run_id: str, datasets: List[Dataset], step: AnalysisStep
