@@ -233,6 +233,14 @@ def run_pipeline(self, run_id: str):
         structured_plan = _apply_plan_edits(structured_plan, run.plan.edits)
         structured_plan.approved = True
 
+        # Early validation: Check if plan has extraction steps
+        if not structured_plan.extract_steps:
+            raise ValueError(
+                f"No extraction steps in the plan. The coordinator could not identify relevant datasets for query: '{run.query}'. "
+                f"Try rephrasing your query to include specific metrics (e.g., 'employment', 'gdp', 'population') "
+                f"or entities (e.g., 'tech', 'technology', 'innovation')."
+            )
+
         selected_sources = _normalize_sources([s.name for s in structured_plan.sources])
         run.selected_sources = selected_sources
         db.commit()
@@ -251,7 +259,22 @@ def run_pipeline(self, run_id: str):
             return {"status": "aborted", "run_id": run_id}
 
         if not datasets:
-            raise ValueError("No datasets were successfully extracted")
+            # Collect failure reasons from extraction results
+            failure_reasons = []
+            for i, result in enumerate(extraction_results):
+                if not result.success and result.error:
+                    step = structured_plan.extract_steps[i] if i < len(structured_plan.extract_steps) else None
+                    source = step.source if step else "unknown"
+                    dataset_ref = step.dataset_ref if step else "unknown"
+                    failure_reasons.append(f"{source}/{dataset_ref}: {result.error}")
+
+            if failure_reasons:
+                error_details = "; ".join(failure_reasons[:3])  # Limit to 3 reasons
+                if len(failure_reasons) > 3:
+                    error_details += f" (+{len(failure_reasons) - 3} more)"
+                raise ValueError(f"No datasets were successfully extracted. Failures: {error_details}")
+            else:
+                raise ValueError("No datasets were successfully extracted. No extraction steps were defined in the plan.")
 
         analytics_agent = AnalyticsAgent(db, event_sink=event_sink)
         analysis_result = analytics_agent.run_analysis(

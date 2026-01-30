@@ -62,7 +62,7 @@ class AgentOrchestrator:
         self.llm_router = LLMRouter()
 
         # Initialize agents
-        self.coordinator = CoordinatorAgent(self.llm_router)
+        self.coordinator = CoordinatorAgent(self.llm_router, db=db)
         self.extraction = ExtractionAgent(db)
         self.analytics = AnalyticsAgent(db, self.llm_router)
 
