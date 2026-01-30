@@ -48,6 +48,8 @@ This starts: PostgreSQL, Redis, Backend API with agents, and Frontend UI.
 Navigate to http://localhost:3000 
 
 
+[ai-workflow-demo.webm](https://github.com/user-attachments/assets/455f96a7-125f-45d2-933b-e1e96625626f)
+
 ---
 
 **🌐 Access Points:**
