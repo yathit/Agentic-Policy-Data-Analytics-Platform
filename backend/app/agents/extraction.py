@@ -70,7 +70,7 @@ class ExtractionAgent:
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from file."""
-        prompt_path = Path(__file__).parents[3] / ".llm" / "prompts" / "extraction.md"
+        prompt_path = Path(__file__).parents[2].joinpath(".llm", "prompts", "extraction.md")
         if prompt_path.exists():
             return prompt_path.read_text()
         else:

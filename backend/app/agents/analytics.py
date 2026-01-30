@@ -92,7 +92,7 @@ class AnalyticsAgent:
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from file."""
-        prompt_path = Path(__file__).parents[3] / ".llm" / "prompts" / "analytics.md"
+        prompt_path = Path(__file__).parents[2] / ".llm" / "prompts" / "analytics.md"
         if prompt_path.exists():
             return prompt_path.read_text()
         else:

@@ -12,6 +12,8 @@ Responsibilities:
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from sqlalchemy.orm import Session
+
 from app.llm.router import LLMRouter
 from app.schemas.events import AgentEvent, EventPhase, AgentType, event_store
 from app.schemas.plan import (
@@ -40,14 +42,16 @@ class CoordinatorAgent:
     - Waits for approval before proceeding
     """
 
-    def __init__(self, llm_router: Optional[LLMRouter] = None):
+    def __init__(self, llm_router: Optional[LLMRouter] = None, db: Optional[Session] = None):
         """
         Initialize Coordinator Agent.
 
         Args:
             llm_router: LLM router for API calls (creates default if None)
+            db: Database session for discovery queries
         """
         self.llm_router = llm_router or LLMRouter()
+        self.db = db
         self.system_prompt = self._load_system_prompt()
         self._connectors = {
             "singstat": SingStatConnector(),
@@ -56,7 +60,7 @@ class CoordinatorAgent:
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from file."""
-        prompt_path = Path(__file__).parents[3] / ".llm" / "prompts" / "coordinator.md"
+        prompt_path = Path(__file__).parents[2] / ".llm" / "prompts" / "coordinator.md"
         if prompt_path.exists():
             return prompt_path.read_text()
         else:
@@ -348,7 +352,11 @@ Respond with JSON:
                     {"source": source_name, "query": query},
                 )
 
-                candidates = connector.discover(query)
+                # Pass db session for connectors that need it (e.g., data.gov.sg)
+                if source_name == "data.gov.sg" and self.db is not None:
+                    candidates = connector.discover(query, db=self.db)
+                else:
+                    candidates = connector.discover(query)
                 discovery_results[source_name] = candidates
 
                 # Record discovery step
