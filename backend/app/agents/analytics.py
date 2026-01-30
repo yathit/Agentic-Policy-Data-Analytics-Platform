@@ -55,6 +55,7 @@ class Insight(BaseModel):
     confidence: float
     limitations: List[str]
     supporting_chart_id: Optional[str] = None
+    llm_response: Optional[Dict[str, Any]] = None
 
 
 class AnalyticsResult(BaseModel):
@@ -611,15 +612,34 @@ Respond with JSON:
                 system_prompt=self.system_prompt,
                 schema=schema,
                 temperature=0.5,
+                return_metadata=True,
             )
 
-            headline = result["headline"]
-            policy_implication = result["policy_implication"]
+            parsed = result.get("parsed") if isinstance(result, dict) else None
+            if not parsed:
+                raise ValueError("LLM response missing parsed content")
+
+            headline = parsed.get("headline", "")
+            policy_implication = parsed.get("policy_implication", "")
+
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "Received insight narration from LLM",
+                {"llm_response": result},
+            )
 
         except Exception as e:
             # Template fallback
             headline = f"{evidence['metric']} changed {evidence['percentage_change']:.1%} from {evidence['year_start']} to {evidence['year_end']}"
             policy_implication = "Further analysis required to determine policy implications."
+            result = {"error": str(e)}
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "LLM narration failed; using fallback template",
+                {"error": str(e)},
+            )
 
         # Calculate confidence based on dataset quality
         validation = dataset.validation_reports[0] if dataset.validation_reports else None
@@ -644,4 +664,5 @@ Respond with JSON:
                 "Subject to data quality constraints",
             ],
             supporting_chart_id=chart_id,
+            llm_response=result if isinstance(result, dict) else None,
         )
