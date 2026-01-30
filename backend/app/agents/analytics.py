@@ -180,7 +180,7 @@ class AnalyticsAgent:
 
             # Compute based on step type
             if step.type == "trend":
-                result = self._compute_trend(run_id, datasets, step)
+                result = self._compute_trend(run_id, datasets, step, approved_plan)
             elif step.type == "yoy":
                 result = self._compute_yoy(run_id, datasets, step)
             elif step.type == "breakdown":
@@ -210,7 +210,11 @@ class AnalyticsAgent:
         )
 
     def _compute_trend(
-        self, run_id: str, datasets: List[Dataset], step: AnalysisStep
+        self,
+        run_id: str,
+        datasets: List[Dataset],
+        step: AnalysisStep,
+        approved_plan: Plan,
     ) -> Optional[Dict[str, Any]]:
         """
         Compute trend analysis.
@@ -270,6 +274,49 @@ class AnalyticsAgent:
             )
             return None
 
+        time_range = approved_plan.intent.time_range if approved_plan and approved_plan.intent else None
+        if time_range:
+            try:
+                start_year = int(time_range.start)
+                end_year = int(time_range.end)
+                series_df = series_df.loc[
+                    (series_df.index >= start_year) & (series_df.index <= end_year)
+                ]
+                self._emit_event(
+                    run_id,
+                    EventPhase.OBSERVATION,
+                    "Applied time range filter for trend analysis",
+                    {
+                        "time_range": {
+                            "start": start_year,
+                            "end": end_year,
+                        }
+                    },
+                )
+            except (TypeError, ValueError):
+                self._emit_event(
+                    run_id,
+                    EventPhase.OBSERVATION,
+                    "Invalid time range; skipping filter",
+                    {
+                        "time_range": {
+                            "start": time_range.start,
+                            "end": time_range.end,
+                        }
+                    },
+                )
+
+        if series_df.empty:
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "No data available after applying time range filter",
+                {"time_range": {"start": time_range.start, "end": time_range.end}}
+                if time_range
+                else {},
+            )
+            return None
+
         years = series_df.index.astype(int).tolist()
         values = series_df.values.tolist()
 
@@ -315,6 +362,11 @@ class AnalyticsAgent:
         )
 
         # Generate insight with LLM narration
+        requested_range = (
+            {"start": time_range.start, "end": time_range.end} if time_range else None
+        )
+        used_range = {"start": years[0], "end": years[-1]}
+
         insight = self._generate_insight(
             run_id,
             dataset,
@@ -326,6 +378,11 @@ class AnalyticsAgent:
                 "percentage_change": percentage_change,
                 "year_start": years[0],
                 "year_end": years[-1],
+                "dataset_id": dataset.id,
+                "dataset_ref": self._extract_dataset_ref(dataset),
+                "dataset_source": dataset.source_type,
+                "time_range": used_range,
+                "requested_time_range": requested_range,
             },
             chart_id=chart.id,
         )
@@ -573,7 +630,14 @@ class AnalyticsAgent:
             run_id,
             EventPhase.ACTION,
             "Generating insight narration via LLM",
-            {"evidence": evidence},
+            {
+                "evidence": evidence,
+                "dataset_id": dataset.id,
+                "dataset_ref": self._extract_dataset_ref(dataset),
+                "dataset_source": dataset.source_type,
+                "time_range": evidence.get("time_range"),
+                "requested_time_range": evidence.get("requested_time_range"),
+            },
         )
 
         prompt = f"""
