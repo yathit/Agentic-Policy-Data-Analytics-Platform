@@ -7,7 +7,7 @@ from typing import TypedDict
 
 from app.core.database import SessionLocal
 from app.core.config import settings
-from app.connectors.data_gov_sg import fetch_collections_page
+from app.connectors.data_gov_sg_ingestor import fetch_collections_page
 from app.db.repo_data_gov_sg_collection import insert_many_ignore_conflicts, CollectionRow
 
 
