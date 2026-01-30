@@ -171,7 +171,7 @@ class CoordinatorAgent:
         extract_steps = self._create_extraction_steps(run_id, intent, sources)
 
         # Step 5: Create analysis steps
-        analysis_steps = self._create_analysis_steps(run_id, intent)
+        analysis_steps = self._create_analysis_steps(run_id, intent, sources, extract_steps)
 
         # Step 6: Assemble plan
         plan = Plan(
@@ -527,7 +527,13 @@ Respond with JSON:
 
         return steps
 
-    def _create_analysis_steps(self, run_id: str, intent: Intent) -> list[AnalysisStep]:
+    def _create_analysis_steps(
+        self,
+        run_id: str,
+        intent: Intent,
+        sources: list[DataSource],
+        extract_steps: list[ExtractionStep],
+    ) -> list[AnalysisStep]:
         """
         Create analysis steps based on intent.
 
@@ -540,11 +546,22 @@ Respond with JSON:
         """
         steps = []
 
+        dataset_ref = None
+        dataset_source = None
+        if extract_steps:
+            dataset_ref = extract_steps[0].dataset_ref
+            dataset_source = extract_steps[0].source
+        elif sources and sources[0].datasets:
+            dataset_ref = sources[0].datasets[0].id
+            dataset_source = sources[0].name
+
         # Default to trend analysis for time-based queries
         if intent.time_range:
             steps.append(
                 AnalysisStep(
                     type="trend",
+                    dataset_ref=dataset_ref,
+                    source=dataset_source,
                     params={
                         "metric": intent.metrics[0] if intent.metrics else "value",
                         "group_by": "year",
@@ -561,6 +578,8 @@ Respond with JSON:
                 steps.append(
                     AnalysisStep(
                         type="yoy",
+                        dataset_ref=dataset_ref,
+                        source=dataset_source,
                         params={
                             "metric": intent.metrics[0] if intent.metrics else "value",
                             "compare_years": [start_year, end_year],

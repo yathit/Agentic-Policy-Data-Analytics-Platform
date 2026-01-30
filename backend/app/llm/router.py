@@ -101,6 +101,7 @@ class LLMRouter:
         temperature: float = 0.7,
         max_tokens: int = 2000,
         timeout_s: int = 30,
+        return_metadata: bool = False,
     ) -> Union[str, Dict[str, Any]]:
         """
         Generate completion with automatic fallback.
@@ -115,7 +116,8 @@ class LLMRouter:
             timeout_s: Request timeout in seconds
 
         Returns:
-            String response or parsed JSON dict (if schema provided)
+            String response or parsed JSON dict (if schema provided).
+            If return_metadata=True, returns a dict with parsed content and metadata.
 
         Raises:
             RuntimeError: If all providers fail
@@ -134,7 +136,29 @@ class LLMRouter:
             logger.info(
                 f"Task '{task_name}' completed with {self.primary_provider.value}"
             )
-            return response.content if not schema else json.loads(response.content)
+            if schema:
+                parsed = json.loads(response.content)
+                if return_metadata:
+                    return {
+                        "parsed": parsed,
+                        "raw": response.content,
+                        "provider": response.provider.value,
+                        "model": response.model,
+                        "usage": response.usage,
+                        "finish_reason": response.finish_reason,
+                    }
+                return parsed
+
+            if return_metadata:
+                return {
+                    "raw": response.content,
+                    "provider": response.provider.value,
+                    "model": response.model,
+                    "usage": response.usage,
+                    "finish_reason": response.finish_reason,
+                }
+
+            return response.content
 
         except Exception as e:
             logger.warning(
@@ -155,7 +179,29 @@ class LLMRouter:
                 logger.info(
                     f"Task '{task_name}' completed with fallback {self.secondary_provider.value}"
                 )
-                return response.content if not schema else json.loads(response.content)
+                if schema:
+                    parsed = json.loads(response.content)
+                    if return_metadata:
+                        return {
+                            "parsed": parsed,
+                            "raw": response.content,
+                            "provider": response.provider.value,
+                            "model": response.model,
+                            "usage": response.usage,
+                            "finish_reason": response.finish_reason,
+                        }
+                    return parsed
+
+                if return_metadata:
+                    return {
+                        "raw": response.content,
+                        "provider": response.provider.value,
+                        "model": response.model,
+                        "usage": response.usage,
+                        "finish_reason": response.finish_reason,
+                    }
+
+                return response.content
 
             except Exception as e2:
                 logger.error(

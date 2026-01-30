@@ -55,6 +55,7 @@ class Insight(BaseModel):
     confidence: float
     limitations: List[str]
     supporting_chart_id: Optional[str] = None
+    llm_response: Optional[Dict[str, Any]] = None
 
 
 class AnalyticsResult(BaseModel):
@@ -179,7 +180,7 @@ class AnalyticsAgent:
 
             # Compute based on step type
             if step.type == "trend":
-                result = self._compute_trend(run_id, datasets, step)
+                result = self._compute_trend(run_id, datasets, step, approved_plan)
             elif step.type == "yoy":
                 result = self._compute_yoy(run_id, datasets, step)
             elif step.type == "breakdown":
@@ -209,7 +210,11 @@ class AnalyticsAgent:
         )
 
     def _compute_trend(
-        self, run_id: str, datasets: List[Dataset], step: AnalysisStep
+        self,
+        run_id: str,
+        datasets: List[Dataset],
+        step: AnalysisStep,
+        approved_plan: Plan,
     ) -> Optional[Dict[str, Any]]:
         """
         Compute trend analysis.
@@ -225,8 +230,9 @@ class AnalyticsAgent:
         if not datasets:
             return None
 
-        # Get first dataset (in real implementation, would match by name)
-        dataset = datasets[0]
+        dataset = self._select_dataset_for_step(run_id, datasets, step)
+        if not dataset:
+            return None
 
         df = self._load_dataset_dataframe(run_id, dataset)
         if df is None or df.empty:
@@ -265,6 +271,49 @@ class AnalyticsAgent:
                 EventPhase.OBSERVATION,
                 "No usable time series data after normalization",
                 {"time_col": time_col, "value_col": value_col},
+            )
+            return None
+
+        time_range = approved_plan.intent.time_range if approved_plan and approved_plan.intent else None
+        if time_range:
+            try:
+                start_year = int(time_range.start)
+                end_year = int(time_range.end)
+                series_df = series_df.loc[
+                    (series_df.index >= start_year) & (series_df.index <= end_year)
+                ]
+                self._emit_event(
+                    run_id,
+                    EventPhase.OBSERVATION,
+                    "Applied time range filter for trend analysis",
+                    {
+                        "time_range": {
+                            "start": start_year,
+                            "end": end_year,
+                        }
+                    },
+                )
+            except (TypeError, ValueError):
+                self._emit_event(
+                    run_id,
+                    EventPhase.OBSERVATION,
+                    "Invalid time range; skipping filter",
+                    {
+                        "time_range": {
+                            "start": time_range.start,
+                            "end": time_range.end,
+                        }
+                    },
+                )
+
+        if series_df.empty:
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "No data available after applying time range filter",
+                {"time_range": {"start": time_range.start, "end": time_range.end}}
+                if time_range
+                else {},
             )
             return None
 
@@ -313,6 +362,11 @@ class AnalyticsAgent:
         )
 
         # Generate insight with LLM narration
+        requested_range = (
+            {"start": time_range.start, "end": time_range.end} if time_range else None
+        )
+        used_range = {"start": years[0], "end": years[-1]}
+
         insight = self._generate_insight(
             run_id,
             dataset,
@@ -324,11 +378,59 @@ class AnalyticsAgent:
                 "percentage_change": percentage_change,
                 "year_start": years[0],
                 "year_end": years[-1],
+                "dataset_id": dataset.id,
+                "dataset_ref": self._extract_dataset_ref(dataset),
+                "dataset_source": dataset.source_type,
+                "time_range": used_range,
+                "requested_time_range": requested_range,
             },
             chart_id=chart.id,
         )
 
         return {"table": table, "chart": chart, "insight": insight}
+
+    def _select_dataset_for_step(
+        self,
+        run_id: str,
+        datasets: List[Dataset],
+        step: AnalysisStep,
+    ) -> Optional[Dataset]:
+        """
+        Select the most appropriate dataset for a given analysis step.
+
+        Uses dataset_ref/source if provided, otherwise falls back to the first dataset.
+        """
+        if not datasets:
+            return None
+
+        target_ref = (step.dataset_ref or "").strip() if hasattr(step, "dataset_ref") else ""
+        target_source = (step.source or "").strip() if hasattr(step, "source") else ""
+
+        if target_ref or target_source:
+            for dataset in datasets:
+                if target_source and dataset.source_type != target_source:
+                    continue
+
+                if target_ref:
+                    extracted = self._extract_dataset_ref(dataset)
+                    if extracted == target_ref:
+                        return dataset
+                    if dataset.name == target_ref:
+                        return dataset
+                    if dataset.provenance and dataset.provenance.source_uri:
+                        if target_ref in dataset.provenance.source_uri:
+                            return dataset
+                else:
+                    return dataset
+
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "No dataset matched analysis step reference; falling back to first dataset",
+                {"dataset_ref": target_ref, "source": target_source},
+            )
+
+        return datasets[0]
 
     def _load_dataset_dataframe(self, run_id: str, dataset: Dataset) -> Optional[pd.DataFrame]:
         """
@@ -528,7 +630,14 @@ class AnalyticsAgent:
             run_id,
             EventPhase.ACTION,
             "Generating insight narration via LLM",
-            {"evidence": evidence},
+            {
+                "evidence": evidence,
+                "dataset_id": dataset.id,
+                "dataset_ref": self._extract_dataset_ref(dataset),
+                "dataset_source": dataset.source_type,
+                "time_range": evidence.get("time_range"),
+                "requested_time_range": evidence.get("requested_time_range"),
+            },
         )
 
         prompt = f"""
@@ -567,15 +676,34 @@ Respond with JSON:
                 system_prompt=self.system_prompt,
                 schema=schema,
                 temperature=0.5,
+                return_metadata=True,
             )
 
-            headline = result["headline"]
-            policy_implication = result["policy_implication"]
+            parsed = result.get("parsed") if isinstance(result, dict) else None
+            if not parsed:
+                raise ValueError("LLM response missing parsed content")
+
+            headline = parsed.get("headline", "")
+            policy_implication = parsed.get("policy_implication", "")
+
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "Received insight narration from LLM",
+                {"llm_response": result},
+            )
 
         except Exception as e:
             # Template fallback
             headline = f"{evidence['metric']} changed {evidence['percentage_change']:.1%} from {evidence['year_start']} to {evidence['year_end']}"
             policy_implication = "Further analysis required to determine policy implications."
+            result = {"error": str(e)}
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "LLM narration failed; using fallback template",
+                {"error": str(e)},
+            )
 
         # Calculate confidence based on dataset quality
         validation = dataset.validation_reports[0] if dataset.validation_reports else None
@@ -600,4 +728,5 @@ Respond with JSON:
                 "Subject to data quality constraints",
             ],
             supporting_chart_id=chart_id,
+            llm_response=result if isinstance(result, dict) else None,
         )
