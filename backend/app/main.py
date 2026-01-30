@@ -87,10 +87,6 @@ app.include_router(health.router, tags=["health"])
 app.include_router(runs.router)
 app.include_router(ws.router)
 
-# Import and include agent routes
-from app.api.routes import agents
-app.include_router(agents.router, tags=["agents"])
-
 
 @app.get("/")
 async def root():

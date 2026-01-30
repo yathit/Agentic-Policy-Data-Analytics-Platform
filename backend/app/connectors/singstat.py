@@ -72,6 +72,9 @@ class SingStatConnector(BaseConnector):
         Uses the Table Builder search API to locate tables matching the intent.
         Search scope includes table title, variable names, and descriptions.
 
+        The SingStat API works best with single keywords, so multi-word queries
+        are split into individual keywords and searched separately.
+
         Args:
             intent: Search query or keywords
 
@@ -79,12 +82,29 @@ class SingStatConnector(BaseConnector):
             List of dataset candidates matching the intent
         """
         try:
-            candidates = self._search_tables(intent)
+            # Extract individual keywords from the intent
+            keywords = self.extract_keywords(intent)
+
+            if not keywords:
+                logger.warning("No valid keywords extracted from intent: %s", intent)
+                return []
+
+            # Search with each keyword and combine results
+            all_candidates: Dict[str, DatasetCandidate] = {}
+
+            for keyword in keywords:
+                candidates = self._search_tables(keyword)
+                for candidate in candidates:
+                    # Use URI as unique key to deduplicate
+                    if candidate.uri not in all_candidates:
+                        all_candidates[candidate.uri] = candidate
+
+            candidates_list = list(all_candidates.values())
 
             if self.prefer_time_series:
-                candidates = self._prioritize_time_series(candidates)
+                candidates_list = self._prioritize_time_series(candidates_list)
 
-            return candidates[: self.max_results]
+            return candidates_list[: self.max_results]
 
         except Exception as e:
             logger.error("Discovery failed for intent '%s': %s", intent, e)

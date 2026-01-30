@@ -70,10 +70,13 @@ class DataGovV2Connector(BaseConnector):
         the user's intent, then returns individual dataset candidates
         from each collection's child_dataset_ids.
 
+        The search works best with single keywords, so multi-word queries
+        are split into individual keywords and searched separately.
+
         Args:
             intent: Search keyword (e.g., "employment statistics")
             db: SQLAlchemy database session (required for discovery)
-            limit: Maximum number of collections to search (default: 10)
+            limit: Maximum number of datasets to return (default: 10)
 
         Returns:
             List of DatasetCandidate objects with uri = dataset_id
@@ -84,17 +87,30 @@ class DataGovV2Connector(BaseConnector):
             )
             return []
 
-        try:
-            collections = search_collections(db, intent, limit=limit)
-        except Exception as e:
-            logger.error("Error searching data.gov.sg collections: %s", e)
+        # Extract individual keywords from the intent
+        keywords = self.extract_keywords(intent)
+
+        if not keywords:
+            logger.warning("No valid keywords extracted from intent: %s", intent)
             return []
+
+        # Search with each keyword and combine results
+        all_collections: Dict[str, dict] = {}
+
+        for keyword in keywords:
+            try:
+                collections = search_collections(db, keyword, limit=limit)
+                for collection in collections:
+                    coll_id = collection.get("collection_id")
+                    if coll_id and coll_id not in all_collections:
+                        all_collections[coll_id] = collection
+            except Exception as e:
+                logger.error("Error searching data.gov.sg collections for keyword '%s': %s", keyword, e)
 
         candidates: List[DatasetCandidate] = []
         seen_dataset_ids: set[str] = set()
-        max_datasets = limit
 
-        for collection in collections:
+        for collection in all_collections.values():
             child_ids = collection.get("child_dataset_ids") or []
             # Take up to 2 datasets per collection to avoid flooding results
             for dataset_id in child_ids[:2]:
@@ -121,15 +137,16 @@ class DataGovV2Connector(BaseConnector):
                     )
                 )
 
-                if len(seen_dataset_ids) >= max_datasets:
+                if len(candidates) >= limit:
                     break
-            if len(seen_dataset_ids) >= max_datasets:
+            if len(candidates) >= limit:
                 break
 
         logger.info(
-            "Discovered %d datasets for intent '%s'",
+            "Discovered %d datasets for intent '%s' (keywords: %s)",
             len(candidates),
             intent,
+            keywords,
         )
         return candidates
 

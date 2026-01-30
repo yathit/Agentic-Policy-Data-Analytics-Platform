@@ -19,9 +19,11 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+import uuid
+
 from app.core.database import SessionLocal
 from app.agents.graph import AgentOrchestrator
-from app.schemas.events import event_store
+from app.models import Event, Run, RunStatus
 
 
 def print_section(title: str):
@@ -31,12 +33,16 @@ def print_section(title: str):
     print("=" * 80 + "\n")
 
 
-def print_events(run_id: str):
-    """Print all events for a run."""
-    events = event_store.get_events(run_id)
+def print_events(db, run_id: str):
+    """Print all events for a run from DB."""
+    events = db.query(Event).filter(
+        Event.run_id == uuid.UUID(run_id)
+    ).order_by(Event.ts.asc()).all()
 
     for event in events:
-        print(f"[{event.agent.value.upper()}] {event.phase.value}: {event.message}")
+        agent_name = event.agent.upper() if event.agent else "UNKNOWN"
+        phase_name = event.phase.upper() if event.phase else "UNKNOWN"
+        print(f"[{agent_name}] {phase_name}: {event.message}")
         if event.payload:
             payload_str = json.dumps(event.payload, indent=2, default=str)
             if len(payload_str) > 500:
@@ -53,18 +59,31 @@ def demo_basic_query():
     db = SessionLocal()
 
     try:
-        # Create orchestrator
-        orchestrator = AgentOrchestrator(db)
-
         # Demo query
         query = "What has been the trend in Singapore's tech sector employment from 2019 to 2023?"
 
         print(f"Query: {query}\n")
 
+        # Create Run record first (mirrors production flow)
+        run = Run(
+            query=query,
+            status=RunStatus.AWAITING_APPROVAL,
+            selected_sources=["data.gov.sg", "singstat"],
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = str(run.id)
+
+        print(f"Created Run: {run_id}\n")
+
+        # Create orchestrator
+        orchestrator = AgentOrchestrator(db)
+
         # Step 1: Execute until approval gate
         print_section("STEP 1: COORDINATOR - Generate Plan")
 
-        result = orchestrator.execute(query)
+        result = orchestrator.execute(query, run_id=run_id)
 
         print("Run ID:", result["run_id"])
         print("\nGenerated Plan:")
@@ -74,7 +93,7 @@ def demo_basic_query():
 
         # Print coordinator events
         print("\nCoordinator Events:")
-        print_events(result["run_id"])
+        print_events(db, result["run_id"])
 
         # Step 2: Approval gate (auto-approve in demo)
         print_section("STEP 2: APPROVAL GATE (HITL)")
@@ -119,7 +138,7 @@ def demo_basic_query():
         # Step 4: Full event trace
         print_section("STEP 4: FULL EVENT TRACE (ReAct)")
 
-        print_events(result["run_id"])
+        print_events(db, result["run_id"])
 
         # Summary
         print_section("DEMO COMPLETE")
@@ -131,7 +150,7 @@ def demo_basic_query():
         print("✓ All events traced for replay and observability")
 
         print(f"\nRun ID: {result['run_id']}")
-        print("All events persisted in event store for audit trail.")
+        print("All events persisted to database for audit trail.")
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
@@ -150,8 +169,6 @@ def demo_with_constraints():
     db = SessionLocal()
 
     try:
-        orchestrator = AgentOrchestrator(db)
-
         query = "Analyze digital transformation metrics"
         constraints = {
             "allowed_sources": ["singstat", "internal"],
@@ -161,7 +178,21 @@ def demo_with_constraints():
         print(f"Query: {query}")
         print(f"Constraints: {json.dumps(constraints, indent=2)}\n")
 
-        result = orchestrator.execute(query, user_constraints=constraints)
+        # Create Run record first (mirrors production flow)
+        run = Run(
+            query=query,
+            status=RunStatus.AWAITING_APPROVAL,
+            selected_sources=constraints.get("allowed_sources", ["singstat"]),
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = str(run.id)
+
+        print(f"Created Run: {run_id}\n")
+
+        orchestrator = AgentOrchestrator(db)
+        result = orchestrator.execute(query, run_id=run_id, user_constraints=constraints)
 
         print("Generated Plan:")
         if result["plan"]:

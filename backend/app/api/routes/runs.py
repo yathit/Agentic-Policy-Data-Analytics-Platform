@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models import Run, RunStatus, Plan, Event, Artifact, Dataset
-from app.schemas.plan import Plan as StructuredPlan, Intent, TimeRange, DataSource, ExtractionStep, AnalysisStep
-from app.services.data_service import DataService
+from app.schemas.plan import Plan as StructuredPlan
+from app.agents.coordinator import CoordinatorAgent
+from app.agents.events import create_db_event_sink
+from app.utils.sources import normalize_sources
 from app.schemas.run import (
     CreateRunRequest,
     CreateRunResponse,
@@ -109,107 +111,35 @@ def _event_to_response(event: Event) -> EventResponse:
     )
 
 
-def _normalize_sources(sources: Optional[list]) -> list:
-    """Normalize source identifiers to canonical values."""
-    if not sources:
-        return ["data.gov.sg", "singstat"]
-    normalized = []
-    for source in sources:
-        if source in ["data_gov_sg", "data.gov.sg"]:
-            normalized.append("data.gov.sg")
-        elif source in ["singstat"]:
-            normalized.append("singstat")
-        elif source in ["internal", "mock_internal"]:
-            normalized.append("internal")
-        else:
-            normalized.append(source)
-    return normalized
-
-
-def _parse_time_range(constraints: dict) -> TimeRange:
-    """Parse time range from constraints or use default."""
-    if constraints and constraints.get("time_range"):
-        start = constraints["time_range"].get("start", "")[:4]
-        end = constraints["time_range"].get("end", "")[:4]
-        if start and end:
-            return TimeRange(start=start, end=end)
-    return TimeRange(start="2020", end="2024")
-
-
 def _build_structured_plan(
+    run_id: uuid.UUID,
     query: str,
     constraints: dict,
     requested_sources: Optional[list],
     db: Session,
 ) -> StructuredPlan:
-    """Build a structured plan using dataset discovery."""
-    allowed_sources = _normalize_sources(
+    """Build a structured plan using CoordinatorAgent with LLM-based intent parsing."""
+    allowed_sources = normalize_sources(
         requested_sources or constraints.get("sources_allowlist")
     )
-    time_range = _parse_time_range(constraints)
-    intent = Intent(
-        question=query,
-        time_range=time_range,
-        entities=[],
-        metrics=[],
+
+    # Create event sink for DB persistence
+    event_sink = create_db_event_sink(db, run_id)
+
+    # Use CoordinatorAgent for LLM-based intent parsing and discovery
+    coordinator = CoordinatorAgent(db=db, event_sink=event_sink)
+
+    user_constraints = {"allowed_sources": allowed_sources}
+    if constraints.get("time_range"):
+        user_constraints["time_range"] = constraints["time_range"]
+
+    plan = coordinator.interpret_query(
+        run_id=str(run_id),
+        query_text=query,
+        user_constraints=user_constraints,
     )
 
-    data_service = DataService(db)
-    candidates = data_service.discover_datasets(query, sources=allowed_sources)
-
-    sources: list[DataSource] = []
-    extract_steps: list[ExtractionStep] = []
-    grouped: dict[str, list] = {}
-    for candidate in candidates:
-        grouped.setdefault(candidate["source_type"], []).append(candidate)
-
-    for source_type in allowed_sources:
-        items = grouped.get(source_type, [])
-        if not items and source_type == "internal":
-            items = [{
-                "name": "Digital Sector Employment",
-                "description": "Internal default dataset",
-                "source_type": "internal",
-                "format": "database",
-                "uri": "table:digital_sector_employment",
-                "metadata": {},
-            }]
-        if not items:
-            continue
-
-        dataset_refs = []
-        for item in items[:2]:
-            dataset_refs.append(item["uri"])
-            extract_steps.append(
-                ExtractionStep(
-                    source=source_type,
-                    dataset_ref=item["uri"],
-                    notes=item.get("description") or f"Discovered for '{query}'",
-                )
-            )
-
-        sources.append(
-            DataSource(
-                name=source_type,
-                datasets=dataset_refs,
-                format=items[0].get("format", "unknown") if items else "unknown",
-            )
-        )
-
-    analysis_steps = [
-        AnalysisStep(
-            type="trend",
-            params={"metric": "value", "group_by": "year"},
-        )
-    ]
-
-    return StructuredPlan(
-        intent=intent,
-        sources=sources,
-        extract_steps=extract_steps,
-        analysis_steps=analysis_steps,
-        approved=False,
-    )
+    return plan
 
 
 def _generate_source_rationale(sources: list) -> list:
@@ -230,7 +160,14 @@ def _build_plan_steps_from_structured(plan: StructuredPlan) -> list:
     sources = [source.name for source in plan.sources]
     datasets = []
     for source in plan.sources:
-        datasets.extend(source.datasets)
+        for ds in source.datasets:
+            # Handle both DiscoveredDataset objects and plain strings
+            if isinstance(ds, str):
+                datasets.append(ds)
+            elif hasattr(ds, "id"):
+                datasets.append(ds.id)
+            else:
+                datasets.append(str(ds))
 
     return [
         {
@@ -301,7 +238,7 @@ async def create_run(
         query=request.query,
         constraints=constraints_dict or None,
         status=RunStatus.AWAITING_APPROVAL,
-        selected_sources=_normalize_sources(
+        selected_sources=normalize_sources(
             request.requested_sources
             or constraints_dict.get("sources_allowlist")
         ),
@@ -309,8 +246,9 @@ async def create_run(
     db.add(run)
     db.flush()
 
-    # Generate structured plan and UI steps
+    # Generate structured plan using CoordinatorAgent (with LLM intent parsing)
     structured_plan = _build_structured_plan(
+        run.id,
         request.query,
         constraints_dict,
         request.requested_sources,
