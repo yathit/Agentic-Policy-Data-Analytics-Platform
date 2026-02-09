@@ -14,6 +14,7 @@ from app.core.database import Base
 
 class RunStatus(str, enum.Enum):
     """Run status values."""
+    PLANNING = "planning"  # Plan generation in progress
     AWAITING_APPROVAL = "awaiting_approval"
     QUEUED = "queued"
     RUNNING = "running"
@@ -33,7 +34,11 @@ class Run(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     query = Column(Text, nullable=False)
     status = Column(
-        SQLEnum(RunStatus, name="run_status"),
+        SQLEnum(
+            RunStatus,
+            name="run_status",
+            values_callable=lambda x: [e.value for e in x]
+        ),
         nullable=False,
         default=RunStatus.AWAITING_APPROVAL
     )

@@ -400,3 +400,110 @@ class TestCoordinatorDiscoveryMessages:
         obs_payload = obs_events[-1].payload
         assert obs_payload["is_truncated"] is False
         assert obs_payload["returned_count"] == 5
+
+
+class TestCoordinatorRowEstimationOptimization:
+    """Tests for reduced planning-time row estimation API calls."""
+
+    def test_select_datasets_caps_row_estimation_api_calls(self, monkeypatch):
+        """Coordinator should cap expensive estimate_rows API calls."""
+        from app.agents.coordinator import CoordinatorAgent
+        from app.schemas.plan import Intent, TimeRange
+        from app.core.config import settings
+
+        mock_connector = MagicMock()
+        mock_connector.estimate_rows.return_value = 500
+
+        candidates = [
+            DatasetCandidate(
+                name=f"Dataset {i}",
+                description="Employment dataset",
+                source_type="data.gov.sg",
+                format="api",
+                uri=f"d_{i}",
+                metadata={},
+            )
+            for i in range(6)
+        ]
+
+        with patch.object(CoordinatorAgent, "__init__", lambda self, llm_router=None, db=None, event_sink=None: None):
+            agent = CoordinatorAgent.__new__(CoordinatorAgent)
+            agent.db = MagicMock()
+            agent.event_sink = lambda *_: None
+            agent._connectors = {"data.gov.sg": mock_connector}
+            agent._emit_event = lambda *args, **kwargs: None
+
+            # Force deterministic ranking path for stable test behavior
+            agent._rank_with_llm = lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("skip llm"))
+
+            monkeypatch.setattr(settings, "selection_row_estimate_max_api_calls", 2)
+            monkeypatch.setattr(settings, "selection_max_total_rows", 100000)
+            monkeypatch.setattr(settings, "selection_max_rows_per_dataset", 50000)
+            monkeypatch.setattr(settings, "pre_filter_max_candidates", 200)
+            monkeypatch.setattr(settings, "row_estimate_default", 1000)
+
+            intent = Intent(
+                question="What are employment trends?",
+                time_range=TimeRange(start="2020", end="2024"),
+                entities=["employment"],
+                metrics=["count"],
+            )
+
+            sources = agent._select_datasets(
+                run_id="test-run",
+                intent=intent,
+                discovery_results={"data.gov.sg": candidates},
+            )
+
+        assert mock_connector.estimate_rows.call_count == 2
+        assert len(sources) == 1
+        assert len(sources[0].datasets) > 0
+
+    def test_select_datasets_uses_metadata_row_estimate_before_api(self, monkeypatch):
+        """Coordinator should prefer metadata estimate and avoid API call."""
+        from app.agents.coordinator import CoordinatorAgent
+        from app.schemas.plan import Intent, TimeRange
+        from app.core.config import settings
+
+        mock_connector = MagicMock()
+        mock_connector.estimate_rows.return_value = 9999
+
+        candidate = DatasetCandidate(
+            name="Employment by Sector",
+            description="Employment dataset",
+            source_type="data.gov.sg",
+            format="api",
+            uri="d_meta_1",
+            metadata={"estimated_rows": 3210},
+        )
+
+        with patch.object(CoordinatorAgent, "__init__", lambda self, llm_router=None, db=None, event_sink=None: None):
+            agent = CoordinatorAgent.__new__(CoordinatorAgent)
+            agent.db = MagicMock()
+            agent.event_sink = lambda *_: None
+            agent._connectors = {"data.gov.sg": mock_connector}
+            agent._emit_event = lambda *args, **kwargs: None
+            agent._rank_with_llm = lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("skip llm"))
+
+            monkeypatch.setattr(settings, "selection_row_estimate_max_api_calls", 0)
+            monkeypatch.setattr(settings, "selection_max_total_rows", 100000)
+            monkeypatch.setattr(settings, "selection_max_rows_per_dataset", 50000)
+            monkeypatch.setattr(settings, "pre_filter_max_candidates", 200)
+
+            intent = Intent(
+                question="Employment trend",
+                time_range=TimeRange(start="2020", end="2024"),
+                entities=["employment"],
+                metrics=["count"],
+            )
+
+            sources = agent._select_datasets(
+                run_id="test-run",
+                intent=intent,
+                discovery_results={"data.gov.sg": [candidate]},
+            )
+
+        assert mock_connector.estimate_rows.call_count == 0
+        assert len(sources) == 1
+        assert len(sources[0].datasets) == 1
+        assert sources[0].datasets[0].estimated_rows == 3210

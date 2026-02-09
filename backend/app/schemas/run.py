@@ -87,7 +87,7 @@ class RunResponse(BaseModel):
 class CreateRunResponse(BaseModel):
     """Response for creating a run."""
     run: RunResponse
-    plan: PlanResponse
+    plan: Optional[PlanResponse] = None  # May be null during planning status
 
 
 class ApproveRunResponse(BaseModel):

@@ -163,43 +163,102 @@ Respond with JSON:
         Returns:
             Proposed Plan (approved=False)
         """
+        # Emit planning started with progress tracking
         self._emit_event(
             run_id,
             EventPhase.REASON,
             f"Interpreting user query: '{query_text}'",
-            {"query": query_text, "constraints": user_constraints, "hints": discovery_hints},
+            {
+                "query": query_text,
+                "constraints": user_constraints,
+                "hints": discovery_hints,
+                "stage": "planning_started",
+                "progress_percent": 5,
+            },
         )
 
         # Step 1: Parse intent
+        self._emit_event(
+            run_id,
+            EventPhase.ACTION,
+            "Parsing query intent with LLM",
+            {"stage": "intent_parsing_started", "progress_percent": 10},
+        )
+
         intent = self._parse_intent(run_id, query_text)
 
         self._emit_event(
             run_id,
             EventPhase.OBSERVATION,
             f"Identified intent: {intent.question}",
-            {"intent": intent.model_dump()},
+            {
+                "intent": intent.model_dump(),
+                "stage": "intent_parsing_completed",
+                "progress_percent": 25,
+            },
         )
 
         # Step 2: Run dataset discovery
-        discovery_results, discovery_steps = self._run_discovery(
-            run_id, intent, user_constraints, discovery_hints
-        )
-
-        self._emit_event(
-            run_id,
-            EventPhase.OBSERVATION,
-            f"Discovery completed: found {sum(len(ds) for ds in discovery_results.values())} datasets",
-            {"discovery_results": {k: len(v) for k, v in discovery_results.items()}},
-        )
-
-        # Step 3: Select best-fit datasets and create sources
-        sources = self._select_datasets(run_id, intent, discovery_results, user_constraints)
+        allowed_sources = []
+        if user_constraints and "allowed_sources" in user_constraints:
+            allowed_sources = user_constraints["allowed_sources"]
+        else:
+            allowed_sources = ["singstat", "data.gov.sg"]
 
         self._emit_event(
             run_id,
             EventPhase.ACTION,
-            f"Selected {len(sources)} data sources with discovered datasets",
-            {"sources": [s.model_dump() for s in sources]},
+            f"Starting dataset discovery across {len(allowed_sources)} sources",
+            {
+                "stage": "discovery_started",
+                "progress_percent": 30,
+                "sources_total": len(allowed_sources),
+            },
+        )
+
+        discovery_results, discovery_steps = self._run_discovery(
+            run_id, intent, user_constraints, discovery_hints
+        )
+
+        total_datasets = sum(len(ds) for ds in discovery_results.values())
+        self._emit_event(
+            run_id,
+            EventPhase.OBSERVATION,
+            f"Discovery completed: found {total_datasets} candidate datasets",
+            {
+                "discovery_results": {k: len(v) for k, v in discovery_results.items()},
+                "stage": "discovery_completed",
+                "progress_percent": 55,
+                "candidates_seen": total_datasets,
+                "sources_completed": len(discovery_results),
+            },
+        )
+
+        # Step 3: Select best-fit datasets and create sources (includes LLM ranking)
+        self._emit_event(
+            run_id,
+            EventPhase.ACTION,
+            f"Ranking {total_datasets} datasets for relevance",
+            {
+                "stage": "ranking_started",
+                "progress_percent": 60,
+                "candidates_seen": total_datasets,
+            },
+        )
+
+        sources = self._select_datasets(run_id, intent, discovery_results, user_constraints)
+
+        selected_count = sum(len(s.datasets) for s in sources)
+        self._emit_event(
+            run_id,
+            EventPhase.OBSERVATION,
+            f"Selected {selected_count} datasets from {len(sources)} sources",
+            {
+                "sources": [s.model_dump() for s in sources],
+                "stage": "ranking_completed",
+                "progress_percent": 80,
+                "datasets_selected": selected_count,
+            },
         )
 
         # Step 4: Create extraction steps from discovered datasets
@@ -209,6 +268,13 @@ Respond with JSON:
         analysis_steps = self._create_analysis_steps(run_id, intent, sources, extract_steps)
 
         # Step 6: Assemble plan
+        self._emit_event(
+            run_id,
+            EventPhase.ACTION,
+            "Assembling execution plan",
+            {"stage": "plan_assembly_started", "progress_percent": 90},
+        )
+
         plan = Plan(
             intent=intent,
             sources=sources,
@@ -223,7 +289,11 @@ Respond with JSON:
             run_id,
             EventPhase.DECISION,
             "Plan created, awaiting approval",
-            {"plan": plan.model_dump()},
+            {
+                "plan": plan.model_dump(),
+                "stage": "plan_ready",
+                "progress_percent": 100,
+            },
         )
 
         return plan
@@ -452,6 +522,12 @@ Respond with JSON:
                     for c in candidates[:5]
                 ]
 
+                # Calculate progress based on sources completed
+                sources_completed = len(discovery_results)
+                sources_total = len(allowed_sources)
+                # Discovery progress is between 30-55%, so scale accordingly
+                discovery_progress = 30 + int((sources_completed / sources_total) * 25)
+
                 self._emit_event(
                     run_id,
                     EventPhase.OBSERVATION,
@@ -463,6 +539,10 @@ Respond with JSON:
                         "is_truncated": is_truncated,
                         "limit": discovery_limit,
                         "datasets": dataset_preview,
+                        "stage": "discovery_source_completed",
+                        "progress_percent": discovery_progress,
+                        "sources_completed": sources_completed,
+                        "sources_total": sources_total,
                     },
                 )
 
@@ -471,7 +551,11 @@ Respond with JSON:
                     run_id,
                     EventPhase.OBSERVATION,
                     f"Discovery failed for {source_name}: {str(e)}",
-                    {"source": source_name, "error": str(e)},
+                    {
+                        "source": source_name,
+                        "error": str(e),
+                        "stage": "discovery_source_failed",
+                    },
                 )
                 discovery_results[source_name] = []
 
@@ -589,18 +673,24 @@ Respond with JSON:
         total_rows = 0
         max_total = settings.selection_max_total_rows
         max_per_dataset = settings.selection_max_rows_per_dataset
+        max_estimate_api_calls = max(0, settings.selection_row_estimate_max_api_calls)
+        estimate_api_calls = 0
+        row_estimate_cache: Dict[str, int] = {}
 
         for candidate, score, reason, confidence, source_name in ranked_candidates:
             connector = self._connectors.get(source_name)
 
-            # Get row estimate
-            if connector and hasattr(connector, "estimate_rows"):
-                try:
-                    estimated_rows = connector.estimate_rows(candidate.uri)
-                except Exception:
-                    estimated_rows = settings.row_estimate_default
-            else:
-                estimated_rows = settings.row_estimate_default
+            cache_key = f"{source_name}:{candidate.uri}"
+            estimated_rows = row_estimate_cache.get(cache_key)
+            if estimated_rows is None:
+                estimated_rows, used_api_call = self._estimate_candidate_rows(
+                    candidate=candidate,
+                    connector=connector,
+                    can_call_api=estimate_api_calls < max_estimate_api_calls,
+                )
+                row_estimate_cache[cache_key] = estimated_rows
+                if used_api_call:
+                    estimate_api_calls += 1
 
             # Apply per-dataset cap
             estimated_rows = min(estimated_rows, max_per_dataset)
@@ -623,6 +713,8 @@ Respond with JSON:
                 "ranking_method_used": ranking_method,
                 "llm_ranked_count": llm_ranked_count,
                 "llm_fallback_reason": llm_fallback_reason,
+                "row_estimation_api_calls": estimate_api_calls,
+                "row_estimation_api_call_cap": max_estimate_api_calls,
             },
         )
 
@@ -651,6 +743,41 @@ Respond with JSON:
             DataSource(name=source, datasets=datasets, format="api")
             for source, datasets in sources_map.items()
         ]
+
+    def _estimate_candidate_rows(
+        self,
+        candidate: DatasetCandidate,
+        connector: Optional[Any],
+        can_call_api: bool,
+    ) -> Tuple[int, bool]:
+        """
+        Estimate candidate row count while minimizing planning-time remote reads.
+
+        Returns:
+            Tuple of (estimated_rows, used_api_call)
+        """
+        default_rows = settings.row_estimate_default
+
+        metadata = candidate.metadata or {}
+        for key in ("estimated_rows", "row_count", "total_count", "total_rows"):
+            value = metadata.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return int(value), False
+            if isinstance(value, str) and value.isdigit():
+                parsed = int(value)
+                if parsed > 0:
+                    return parsed, False
+
+        if can_call_api and connector and hasattr(connector, "estimate_rows"):
+            try:
+                estimated = int(connector.estimate_rows(candidate.uri))
+                if estimated > 0:
+                    return estimated, True
+            except Exception:
+                pass
+            return default_rows, True
+
+        return default_rows, False
 
     def _score_dataset(self, candidate: DatasetCandidate, intent: Intent) -> float:
         """

@@ -10,9 +10,6 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models import Run, RunStatus, Plan, Event, Artifact, Dataset
-from app.schemas.plan import Plan as StructuredPlan
-from app.agents.coordinator import CoordinatorAgent
-from app.agents.events import create_db_event_sink
 from app.utils.sources import normalize_sources
 from app.schemas.run import (
     CreateRunRequest,
@@ -111,111 +108,6 @@ def _event_to_response(event: Event) -> EventResponse:
     )
 
 
-def _build_structured_plan(
-    run_id: uuid.UUID,
-    query: str,
-    constraints: dict,
-    requested_sources: Optional[list],
-    db: Session,
-) -> StructuredPlan:
-    """Build a structured plan using CoordinatorAgent with LLM-based intent parsing."""
-    allowed_sources = normalize_sources(
-        requested_sources or constraints.get("sources_allowlist")
-    )
-
-    # Create event sink for DB persistence
-    event_sink = create_db_event_sink(db, run_id)
-
-    # Use CoordinatorAgent for LLM-based intent parsing and discovery
-    coordinator = CoordinatorAgent(db=db, event_sink=event_sink)
-
-    user_constraints = {"allowed_sources": allowed_sources}
-    if constraints.get("time_range"):
-        user_constraints["time_range"] = constraints["time_range"]
-
-    plan = coordinator.interpret_query(
-        run_id=str(run_id),
-        query_text=query,
-        user_constraints=user_constraints,
-    )
-
-    return plan
-
-
-def _generate_source_rationale(sources: list) -> list:
-    """Generate source rationale (simple heuristic)."""
-    rationale_map = {
-        "data.gov.sg": "Official open data portal with broad coverage",
-        "singstat": "Authoritative statistics and time-series indicators",
-        "internal": "Internal datasets with high trust and low latency",
-    }
-    return [
-        {"source": s, "why": rationale_map.get(s, "Selected based on query requirements")}
-        for s in sources
-    ]
-
-
-def _build_plan_steps_from_structured(plan: StructuredPlan) -> list:
-    """Create UI-friendly plan steps from a structured plan."""
-    sources = [source.name for source in plan.sources]
-    datasets = []
-    dataset_details = []
-
-    for source in plan.sources:
-        for ds in source.datasets:
-            # Handle both DiscoveredDataset objects and plain strings
-            if isinstance(ds, str):
-                datasets.append(ds)
-                dataset_details.append({
-                    "id": ds,
-                    "name": ds,
-                    "source": source.name,
-                })
-            elif hasattr(ds, "id"):
-                datasets.append(ds.id)
-                dataset_details.append({
-                    "id": ds.id,
-                    "name": getattr(ds, "title", ds.id),
-                    "source": source.name,
-                    "score": getattr(ds, "score", None),
-                })
-            else:
-                datasets.append(str(ds))
-                dataset_details.append({
-                    "id": str(ds),
-                    "name": str(ds),
-                    "source": source.name,
-                })
-
-    return [
-        {
-            "id": str(uuid.uuid4()),
-            "agent": "coordinator",
-            "action": "select_sources",
-            "inputs": {"candidates": sources},
-            "requires_approval": True,
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "agent": "extraction",
-            "action": "fetch_datasets",
-            "inputs": {
-                "sources": sources,
-                "datasets": datasets,
-                "dataset_details": dataset_details,
-            },
-            "requires_approval": False,
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "agent": "analytics",
-            "action": "compute_trends",
-            "inputs": {"metrics": plan.intent.metrics or ["value"]},
-            "requires_approval": False,
-        },
-    ]
-
-
 # ============================================================================
 # Health Endpoint
 # ============================================================================
@@ -250,51 +142,48 @@ async def create_run(
     db: Session = Depends(get_db),
 ):
     """
-    Create a new run with a proposed plan.
-    The run will be in 'awaiting_approval' status until approved.
+    Create a new run and trigger background plan generation.
+
+    Returns immediately with run_id in 'planning' status.
+    Plan generation happens asynchronously, emitting progress events.
+    Status transitions: planning -> awaiting_approval (or failed).
     """
     constraints_dict = request.constraints.model_dump() if request.constraints else {}
 
-    # Create the run
+    # Create the run with planning status (returns immediately)
     run = Run(
         query=request.query,
         constraints=constraints_dict or None,
-        status=RunStatus.AWAITING_APPROVAL,
+        status=RunStatus.PLANNING,
         selected_sources=normalize_sources(
             request.requested_sources
             or constraints_dict.get("sources_allowlist")
         ),
     )
     db.add(run)
-    db.flush()
-
-    # Generate structured plan using CoordinatorAgent (with LLM intent parsing)
-    structured_plan = _build_structured_plan(
-        run.id,
-        request.query,
-        constraints_dict,
-        request.requested_sources,
-        db,
-    )
-    steps = _build_plan_steps_from_structured(structured_plan)
-    sources = [source.name for source in structured_plan.sources]
-
-    # Create the plan
-    plan = Plan(
-        run_id=run.id,
-        version=1,
-        steps=steps,
-        plan_json=structured_plan.model_dump(),
-        source_rationale=_generate_source_rationale(sources),
-    )
-    db.add(plan)
     db.commit()
     db.refresh(run)
-    db.refresh(plan)
 
+    # Trigger background plan generation task
+    try:
+        from app.tasks.pipeline import generate_plan
+        generate_plan.delay(
+            str(run.id),
+            request.query,
+            constraints_dict,
+            request.requested_sources or [],
+        )
+    except Exception as e:
+        # If task queuing fails (e.g., Celery/Redis not available), mark run as failed
+        run.status = RunStatus.FAILED
+        run.error_summary = f"Failed to start plan generation: {str(e)[:200]}"
+        db.commit()
+        db.refresh(run)
+
+    # Return immediately with run_id (plan will be null during planning)
     return CreateRunResponse(
         run=_run_to_response(run),
-        plan=_plan_to_response(plan),
+        plan=None,
     )
 
 

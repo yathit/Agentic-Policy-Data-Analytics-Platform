@@ -27,6 +27,18 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# CORS middleware - added immediately after app creation to ensure all responses have CORS headers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 def _is_data_gov_sg_collection_empty() -> bool:
     """Check if data_gov_sg_collection table is empty."""
@@ -69,18 +81,6 @@ async def startup_event():
 app.add_exception_handler(APIException, api_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Include routers
 app.include_router(health.router, tags=["health"])

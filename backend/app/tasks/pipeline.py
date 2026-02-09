@@ -1,5 +1,5 @@
 """
-Background task for running the analytics pipeline.
+Background task for running the analytics pipeline and plan generation.
 """
 
 import uuid
@@ -8,8 +8,9 @@ from typing import Optional
 
 from app.core.celery_app import celery_app
 from app.core.database import SessionLocal
-from app.models import Run, RunStatus, Artifact
+from app.models import Run, RunStatus, Artifact, Plan
 from app.schemas.plan import Plan as StructuredPlan, TimeRange
+from app.agents.coordinator import CoordinatorAgent
 from app.agents.extraction import ExtractionAgent
 from app.agents.analytics import AnalyticsAgent
 from app.agents.events import create_db_event_sink, emit_db_event
@@ -278,6 +279,229 @@ def run_pipeline(self, run_id: str):
                     phase="decision",
                     message="Pipeline failed with error",
                     payload={"error": str(e)[:200]},  # Don't expose full stack traces
+                )
+        except Exception:
+            pass
+
+        raise
+
+    finally:
+        db.close()
+
+
+def _generate_source_rationale(sources: list) -> list:
+    """Generate source rationale (simple heuristic)."""
+    rationale_map = {
+        "data.gov.sg": "Official open data portal with broad coverage",
+        "singstat": "Authoritative statistics and time-series indicators",
+        "internal": "Internal datasets with high trust and low latency",
+    }
+    return [
+        {"source": s, "why": rationale_map.get(s, "Selected based on query requirements")}
+        for s in sources
+    ]
+
+
+def _build_plan_steps_from_structured(plan: StructuredPlan) -> list:
+    """Create UI-friendly plan steps from a structured plan."""
+    sources = [source.name for source in plan.sources]
+    datasets = []
+    dataset_details = []
+
+    for source in plan.sources:
+        for ds in source.datasets:
+            # Handle both DiscoveredDataset objects and plain strings
+            if isinstance(ds, str):
+                datasets.append(ds)
+                dataset_details.append({
+                    "id": ds,
+                    "name": ds,
+                    "source": source.name,
+                })
+            elif hasattr(ds, "id"):
+                datasets.append(ds.id)
+                dataset_details.append({
+                    "id": ds.id,
+                    "name": getattr(ds, "title", ds.id),
+                    "source": source.name,
+                    "score": getattr(ds, "score", None),
+                })
+            else:
+                datasets.append(str(ds))
+                dataset_details.append({
+                    "id": str(ds),
+                    "name": str(ds),
+                    "source": source.name,
+                })
+
+    return [
+        {
+            "id": str(uuid.uuid4()),
+            "agent": "coordinator",
+            "action": "select_sources",
+            "inputs": {"candidates": sources},
+            "requires_approval": True,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "agent": "extraction",
+            "action": "fetch_datasets",
+            "inputs": {
+                "sources": sources,
+                "datasets": datasets,
+                "dataset_details": dataset_details,
+            },
+            "requires_approval": False,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "agent": "analytics",
+            "action": "compute_trends",
+            "inputs": {"metrics": plan.intent.metrics or ["value"]},
+            "requires_approval": False,
+        },
+    ]
+
+
+@celery_app.task(bind=True, max_retries=2)
+def generate_plan(self, run_id: str, query: str, constraints: dict, requested_sources: list):
+    """
+    Generate execution plan for a run in the background.
+
+    This task handles LLM-based intent parsing and dataset discovery,
+    emitting progress events throughout the process.
+
+    Args:
+        run_id: UUID of the run
+        query: User's natural language query
+        constraints: Query constraints dict
+        requested_sources: List of requested source names
+    """
+    db = SessionLocal()
+
+    try:
+        run_uuid = uuid.UUID(run_id)
+        run = db.query(Run).filter(Run.id == run_uuid).first()
+
+        if not run:
+            raise ValueError(f"Run {run_id} not found")
+
+        # Check if run was aborted before starting
+        if run.status == RunStatus.ABORTED:
+            return {"status": "aborted", "run_id": run_id}
+
+        # Idempotency check: skip if plan already exists
+        if run.plan is not None:
+            return {"status": "already_planned", "run_id": run_id}
+
+        # Emit planning started event
+        emit_db_event(
+            db,
+            run_uuid,
+            agent="coordinator",
+            phase="action",
+            message="Starting plan generation",
+            payload={
+                "stage": "planning_started",
+                "progress_percent": 5,
+            },
+        )
+
+        # Normalize sources
+        allowed_sources = normalize_sources(
+            requested_sources or constraints.get("sources_allowlist")
+        )
+
+        # Create event sink for DB persistence
+        event_sink = create_db_event_sink(db, run_uuid)
+
+        # Use CoordinatorAgent for LLM-based intent parsing and discovery
+        coordinator = CoordinatorAgent(db=db, event_sink=event_sink)
+
+        user_constraints = {"allowed_sources": allowed_sources}
+        if constraints.get("time_range"):
+            user_constraints["time_range"] = constraints["time_range"]
+
+        # Generate the structured plan (this calls LLM and runs discovery)
+        structured_plan = coordinator.interpret_query(
+            run_id=run_id,
+            query_text=query,
+            user_constraints=user_constraints,
+        )
+
+        # Build plan steps and rationale
+        steps = _build_plan_steps_from_structured(structured_plan)
+        sources = [source.name for source in structured_plan.sources]
+
+        # Emit plan assembly event
+        emit_db_event(
+            db,
+            run_uuid,
+            agent="coordinator",
+            phase="action",
+            message="Assembling final plan",
+            payload={
+                "stage": "plan_assembly_started",
+                "progress_percent": 90,
+                "sources_count": len(sources),
+            },
+        )
+
+        # Create the plan record
+        plan = Plan(
+            run_id=run_uuid,
+            version=1,
+            steps=steps,
+            plan_json=structured_plan.model_dump(),
+            source_rationale=_generate_source_rationale(sources),
+        )
+        db.add(plan)
+
+        # Update run status to awaiting_approval
+        run.status = RunStatus.AWAITING_APPROVAL
+        run.selected_sources = normalize_sources(sources)
+        db.commit()
+        db.refresh(run)
+        db.refresh(plan)
+
+        # Emit plan ready event
+        emit_db_event(
+            db,
+            run_uuid,
+            agent="coordinator",
+            phase="decision",
+            message="Plan ready for approval",
+            payload={
+                "stage": "plan_ready",
+                "progress_percent": 100,
+                "plan_id": str(plan.id),
+                "status": "awaiting_approval",
+            },
+        )
+
+        return {"status": "plan_ready", "run_id": run_id, "plan_id": str(plan.id)}
+
+    except Exception as e:
+        # Mark run as failed
+        try:
+            run = db.query(Run).filter(Run.id == uuid.UUID(run_id)).first()
+            if run:
+                run.status = RunStatus.FAILED
+                run.finished_at = datetime.utcnow()
+                run.error_summary = f"Planning failed: {str(e)[:450]}"
+                db.commit()
+
+                emit_db_event(
+                    db,
+                    uuid.UUID(run_id),
+                    agent="coordinator",
+                    phase="decision",
+                    message="Plan generation failed",
+                    payload={
+                        "stage": "planning_failed",
+                        "error": str(e)[:200],
+                        "retry_guidance": "Try rephrasing your query or selecting different sources",
+                    },
                 )
         except Exception:
             pass

@@ -1,5 +1,6 @@
 // Run status types
 export type RunStatus =
+  | 'planning'
   | 'queued'
   | 'needs_approval'
   | 'awaiting_approval'
@@ -153,7 +154,7 @@ export interface CreateRunRequest {
 
 export interface CreateRunResponse {
   run: Run;
-  plan: Plan;
+  plan?: Plan;  // May be null during planning status
 }
 
 export interface ApproveRunRequest {

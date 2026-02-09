@@ -40,9 +40,10 @@ class Settings(BaseSettings):
     llm_ranking_max_parallel: int = 5  # Max concurrent LLM ranking requests
 
     # Selection settings
-    selection_max_total_rows: int = 200000  # Total row budget for selected datasets
-    selection_max_rows_per_dataset: int = 50000  # Per-dataset row cap
+    selection_max_total_rows: int = 20000  # Total row budget for selected datasets
+    selection_max_rows_per_dataset: int = 5000  # Per-dataset row cap
     row_estimate_default: int = 1000  # Conservative default when estimation unavailable
+    selection_row_estimate_max_api_calls: int = 5  # Cap external row-estimation calls during planning
 
     @property
     def database_url(self) -> str:
