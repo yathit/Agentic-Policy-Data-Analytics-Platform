@@ -53,8 +53,8 @@ class DataGovV2Connector(BaseConnector):
         self.base_delay = config.get("base_delay", 2.0) if config else 2.0
         self.request_timeout = config.get("request_timeout", 30) if config else 30
         self.max_rows = config.get("max_rows", 100000) if config else 100000
-        # Keep integration/demo runs fast; override via config if needed.
-        self.max_pages = config.get("max_pages", 2) if config else 2
+        # None means fetch all pages; set a limit for testing/demo if needed.
+        self.max_pages = config.get("max_pages") if config else None
         self.api_key = config.get("api_key") if config else None
 
     def discover(
@@ -201,9 +201,9 @@ class DataGovV2Connector(BaseConnector):
         rows = data.get("rows", [])
         all_rows.extend(rows)
 
-        # Handle pagination
+        # Handle pagination - fetch all pages when max_pages is None
         page_count = 1
-        while data.get("links", {}).get("next") and page_count < self.max_pages:
+        while data.get("links", {}).get("next") and (self.max_pages is None or page_count < self.max_pages):
             next_link = data["links"]["next"]
             # Handle relative URLs - append to base URL
             if not next_link.startswith("http"):
@@ -225,7 +225,7 @@ class DataGovV2Connector(BaseConnector):
                     dataset_id,
                 )
                 break
-        if data.get("links", {}).get("next") and page_count >= self.max_pages:
+        if data.get("links", {}).get("next") and self.max_pages is not None and page_count >= self.max_pages:
             logger.info(
                 "Page limit (%d) reached for %s, data may be truncated",
                 self.max_pages,
