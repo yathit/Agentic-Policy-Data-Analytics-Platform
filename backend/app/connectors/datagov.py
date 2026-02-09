@@ -430,19 +430,21 @@ class DataGovV2Connector(BaseConnector):
         if non_null.empty:
             return None, None
 
-        # Keep numeric year columns as year values (e.g., 1996), not epoch timestamps.
-        if "year" in column_name.lower():
-            year_numeric = pd.to_numeric(series, errors="coerce")
-            non_null_year = year_numeric.dropna()
-            if not non_null_year.empty:
-                year_like = non_null_year[(non_null_year >= 1900) & (non_null_year <= 2100)]
-                if len(year_like) / len(non_null_year) >= 0.9:
-                    return year_numeric.round().astype("Int64"), {
-                        "operation": "normalize_year",
-                        "description": f"Normalized column '{column_name}' as year values",
-                        "parameters": {"column": column_name},
-                        "columns_affected": [column_name],
-                    }
+        # Check if values look like year-only data (e.g., 1996, "2020")
+        # This handles both numeric and string columns containing just years
+        year_numeric = pd.to_numeric(series, errors="coerce")
+        non_null_year = year_numeric.dropna()
+        if not non_null_year.empty:
+            year_like = non_null_year[(non_null_year >= 1900) & (non_null_year <= 2100)]
+            # Also check that values are integers (no decimal part)
+            is_integer_like = (non_null_year == non_null_year.round()).all()
+            if len(year_like) / len(non_null_year) >= 0.9 and is_integer_like:
+                return year_numeric.round().astype("Int64"), {
+                    "operation": "normalize_year",
+                    "description": f"Normalized column '{column_name}' as year values",
+                    "parameters": {"column": column_name},
+                    "columns_affected": [column_name],
+                }
 
         # Avoid converting numeric identifier columns to datetime nanoseconds.
         if pd.api.types.is_numeric_dtype(series):
