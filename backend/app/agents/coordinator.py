@@ -348,6 +348,9 @@ Respond with JSON:
             {"query": query, "sources": allowed_sources},
         )
 
+        # Discovery limits per source
+        discovery_limit = 10
+
         # Run discovery on each connector
         for source_name in allowed_sources:
             connector = self._connectors.get(source_name)
@@ -362,32 +365,69 @@ Respond with JSON:
                     {"source": source_name, "query": query},
                 )
 
+                # Request limit+1 to detect if results are truncated
+                request_limit = discovery_limit + 1
+
                 # Pass db session for connectors that need it (e.g., data.gov.sg)
                 if source_name == "data.gov.sg" and self.db is not None:
-                    candidates = connector.discover(query, db=self.db)
+                    candidates = connector.discover(query, db=self.db, limit=request_limit)
                 else:
                     candidates = connector.discover(query)
+
+                # Determine if results are truncated
+                is_truncated = len(candidates) > discovery_limit
+                total_count = len(candidates) if not is_truncated else None
+                returned_count = min(len(candidates), discovery_limit)
+
+                # Trim to actual limit
+                if is_truncated:
+                    candidates = candidates[:discovery_limit]
+
                 discovery_results[source_name] = candidates
 
-                # Record discovery step
+                # Build observation message with truncation info
+                if is_truncated:
+                    obs_message = f"Found {returned_count}+ datasets from {source_name} (results capped at {discovery_limit})"
+                    notes = f"Found {returned_count}+ candidate datasets (capped at {discovery_limit})"
+                else:
+                    obs_message = f"Found {returned_count} datasets from {source_name}"
+                    notes = f"Found {returned_count} candidate datasets"
+
+                # Record discovery step with truncation info
                 discovery_steps.append(
                     DiscoveryStep(
                         source=source_name,
                         query=query,
-                        notes=f"Found {len(candidates)} candidate datasets",
+                        notes=notes,
+                        returned_count=returned_count,
+                        total_count=total_count,
+                        is_truncated=is_truncated,
+                        limit=discovery_limit,
                     )
                 )
+
+                # Build dataset preview for payload
+                dataset_preview = [
+                    {
+                        "id": c.uri,
+                        "name": c.name,
+                        "source": source_name,
+                        "score": c.metadata.get("score"),
+                    }
+                    for c in candidates[:5]
+                ]
 
                 self._emit_event(
                     run_id,
                     EventPhase.OBSERVATION,
-                    f"Found {len(candidates)} datasets from {source_name}",
+                    obs_message,
                     {
                         "source": source_name,
-                        "count": len(candidates),
-                        "datasets": [
-                            {"id": c.uri, "name": c.name} for c in candidates[:5]
-                        ],
+                        "returned_count": returned_count,
+                        "total_count": total_count,
+                        "is_truncated": is_truncated,
+                        "limit": discovery_limit,
+                        "datasets": dataset_preview,
                     },
                 )
 

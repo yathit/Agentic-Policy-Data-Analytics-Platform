@@ -61,6 +61,94 @@ function formatTime(ts: string): string {
   });
 }
 
+/**
+ * Check if a string is a valid URL.
+ */
+function isUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Known URL field names in payloads that should be rendered as links.
+ */
+const URL_FIELD_NAMES = new Set([
+  'source_uri',
+  'portal_url',
+  'api_endpoint',
+  'url',
+  'link',
+  'href',
+]);
+
+/**
+ * Render a payload value, converting URLs to clickable links.
+ */
+function renderPayloadValue(key: string, value: unknown): React.ReactNode {
+  // Check if this is a URL field or looks like a URL
+  if (isUrl(value) || (typeof value === 'string' && URL_FIELD_NAMES.has(key))) {
+    if (isUrl(value)) {
+      return (
+        <a
+          href={value}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:text-blue-800 underline break-all"
+        >
+          {value}
+        </a>
+      );
+    }
+  }
+
+  // For objects and arrays, return as JSON
+  if (typeof value === 'object' && value !== null) {
+    return JSON.stringify(value, null, 2);
+  }
+
+  // For primitives, return as string
+  return String(value);
+}
+
+/**
+ * Render payload with URL fields as clickable links.
+ */
+function PayloadDisplay({ payload }: { payload: Record<string, unknown> }) {
+  const entries = Object.entries(payload);
+
+  // Check if any values are URLs that should be displayed prominently
+  const urlEntries = entries.filter(([_key, value]) => isUrl(value));
+  const otherEntries = entries.filter(([_key, value]) => !isUrl(value));
+
+  return (
+    <div className="space-y-2">
+      {/* Render URL fields prominently */}
+      {urlEntries.length > 0 && (
+        <div className="space-y-1">
+          {urlEntries.map(([key, value]) => (
+            <div key={key} className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 font-medium">{key}:</span>
+              {renderPayloadValue(key, value)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Render other fields as JSON */}
+      {otherEntries.length > 0 && (
+        <pre className="p-2 bg-gray-50 rounded text-xs overflow-x-auto">
+          {JSON.stringify(Object.fromEntries(otherEntries), null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export default function AgentTimeline({ events, filters }: AgentTimelineProps) {
   const filteredEvents = events.filter((event) => {
     if (filters?.agents?.length && !filters.agents.includes(event.agent)) {
@@ -125,9 +213,9 @@ export default function AgentTimeline({ events, filters }: AgentTimelineProps) {
                     <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">
                       View payload
                     </summary>
-                    <pre className="mt-2 p-2 bg-gray-50 rounded text-xs overflow-x-auto">
-                      {JSON.stringify(event.payload, null, 2)}
-                    </pre>
+                    <div className="mt-2">
+                      <PayloadDisplay payload={event.payload} />
+                    </div>
                   </details>
                 )}
               </div>

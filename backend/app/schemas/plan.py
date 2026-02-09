@@ -57,6 +57,18 @@ class DiscoveryStep(BaseModel):
     source: str = Field(..., description="Source name: data.gov.sg, singstat")
     query: str = Field(..., description="Search query used for discovery")
     notes: str = Field(default="", description="Additional notes about the discovery")
+    returned_count: Optional[int] = Field(
+        default=None, description="Number of datasets returned (after limit)"
+    )
+    total_count: Optional[int] = Field(
+        default=None, description="Total matching datasets before limit"
+    )
+    is_truncated: bool = Field(
+        default=False, description="Whether results were truncated by limit"
+    )
+    limit: Optional[int] = Field(
+        default=None, description="The limit applied to discovery results"
+    )
 
 
 class ExtractionStep(BaseModel):

@@ -159,15 +159,33 @@ def _build_plan_steps_from_structured(plan: StructuredPlan) -> list:
     """Create UI-friendly plan steps from a structured plan."""
     sources = [source.name for source in plan.sources]
     datasets = []
+    dataset_details = []
+
     for source in plan.sources:
         for ds in source.datasets:
             # Handle both DiscoveredDataset objects and plain strings
             if isinstance(ds, str):
                 datasets.append(ds)
+                dataset_details.append({
+                    "id": ds,
+                    "name": ds,
+                    "source": source.name,
+                })
             elif hasattr(ds, "id"):
                 datasets.append(ds.id)
+                dataset_details.append({
+                    "id": ds.id,
+                    "name": getattr(ds, "title", ds.id),
+                    "source": source.name,
+                    "score": getattr(ds, "score", None),
+                })
             else:
                 datasets.append(str(ds))
+                dataset_details.append({
+                    "id": str(ds),
+                    "name": str(ds),
+                    "source": source.name,
+                })
 
     return [
         {
@@ -181,7 +199,11 @@ def _build_plan_steps_from_structured(plan: StructuredPlan) -> list:
             "id": str(uuid.uuid4()),
             "agent": "extraction",
             "action": "fetch_datasets",
-            "inputs": {"sources": sources, "datasets": datasets},
+            "inputs": {
+                "sources": sources,
+                "datasets": datasets,
+                "dataset_details": dataset_details,
+            },
             "requires_approval": False,
         },
         {

@@ -20,7 +20,10 @@
       "Bash(docker restart:*)",
       "Bash(docker exec:*)",
       "Bash(git mv:*)",
-      "Bash(docker-compose:*)"
+      "Bash(docker-compose:*)",
+      "Bash(dir:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }
