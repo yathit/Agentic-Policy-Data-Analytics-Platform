@@ -465,6 +465,14 @@ def generate_plan(self, run_id: str, query: str, constraints: dict, requested_so
         db.refresh(plan)
 
         # Emit plan ready event
+        execution_steps = [
+            {
+                "order": idx + 1,
+                "agent": step.get("agent", ""),
+                "action": step.get("action", ""),
+            }
+            for idx, step in enumerate(steps)
+        ]
         emit_db_event(
             db,
             run_uuid,
@@ -476,6 +484,7 @@ def generate_plan(self, run_id: str, query: str, constraints: dict, requested_so
                 "progress_percent": 100,
                 "plan_id": str(plan.id),
                 "status": "awaiting_approval",
+                "execution_steps": execution_steps,
             },
         )
 

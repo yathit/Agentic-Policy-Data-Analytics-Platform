@@ -384,6 +384,14 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
                           {step.agent}:
                         </span>{' '}
                         <span className="text-gray-700">{step.action}</span>
+                        <details className="mt-2">
+                          <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">
+                            View payload
+                          </summary>
+                          <pre className="mt-2 p-2 bg-gray-50 border border-gray-200 rounded text-xs text-gray-700 overflow-x-auto">
+                            {JSON.stringify(step.inputs ?? {}, null, 2)}
+                          </pre>
+                        </details>
                       </div>
                     </div>
                   ))}

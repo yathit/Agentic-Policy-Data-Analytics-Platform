@@ -116,6 +116,19 @@ function renderPayloadValue(key: string, value: unknown): ReactNode {
   return String(value);
 }
 
+interface SelectedDatasetPreview {
+  id: string;
+  title: string;
+  source: string;
+  score?: number;
+}
+
+interface ExecutionStepPreview {
+  order: number;
+  agent: string;
+  action: string;
+}
+
 function getRunDatasetPath(event: AgentEvent): string | null {
   if (event.agent !== 'extraction' || event.phase !== 'decision' || !event.payload) {
     return null;
@@ -132,6 +145,94 @@ function getRunDatasetPath(event: AgentEvent): string | null {
   }
 
   return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function extractSelectedDatasets(payload?: Record<string, unknown>): SelectedDatasetPreview[] {
+  if (!payload) return [];
+
+  const parseSources = (sources: unknown): SelectedDatasetPreview[] => {
+    if (!Array.isArray(sources)) return [];
+    const items: SelectedDatasetPreview[] = [];
+
+    for (const sourceItem of sources) {
+      const sourceRecord = asRecord(sourceItem);
+      if (!sourceRecord) continue;
+
+      const sourceName = typeof sourceRecord.name === 'string' ? sourceRecord.name : 'unknown';
+      const datasets = sourceRecord.datasets;
+      if (!Array.isArray(datasets)) continue;
+
+      for (const datasetItem of datasets) {
+        const dataset = asRecord(datasetItem);
+        if (!dataset) continue;
+        const id = typeof dataset.id === 'string' ? dataset.id : '';
+        const title = typeof dataset.title === 'string' ? dataset.title : id;
+        const rawScore = dataset.relevance_score ?? dataset.score;
+        const score = typeof rawScore === 'number' ? rawScore : undefined;
+
+        if (id || title) {
+          items.push({ id: id || title, title: title || id, source: sourceName, score });
+        }
+      }
+    }
+
+    return items;
+  };
+
+  const direct = parseSources(payload.sources);
+  if (direct.length > 0) {
+    return direct;
+  }
+
+  const plan = asRecord(payload.plan);
+  if (plan) {
+    return parseSources(plan.sources);
+  }
+
+  return [];
+}
+
+function extractExecutionSteps(payload?: Record<string, unknown>): ExecutionStepPreview[] {
+  if (!payload) return [];
+
+  const direct = payload.execution_steps;
+  if (Array.isArray(direct)) {
+    const parsed = direct
+      .map((item, idx) => {
+        const row = asRecord(item);
+        if (!row) return null;
+        const agent = typeof row.agent === 'string' ? row.agent : '';
+        const action = typeof row.action === 'string' ? row.action : '';
+        const order = typeof row.order === 'number' ? row.order : idx + 1;
+        if (!agent || !action) return null;
+        return { order, agent, action };
+      })
+      .filter((v): v is ExecutionStepPreview => v !== null);
+    if (parsed.length > 0) {
+      return parsed;
+    }
+  }
+
+  // Fallback for older events that include only structured plan payload.
+  const plan = asRecord(payload.plan);
+  if (!plan) return [];
+  const hasSources = Array.isArray(plan.sources) && plan.sources.length > 0;
+  const hasExtract = Array.isArray(plan.extract_steps) && plan.extract_steps.length > 0;
+  const hasAnalysis = Array.isArray(plan.analysis_steps) && plan.analysis_steps.length > 0;
+  if (!hasSources && !hasExtract && !hasAnalysis) return [];
+
+  return [
+    { order: 1, agent: 'coordinator', action: 'select_sources' },
+    { order: 2, agent: 'extraction', action: 'fetch_datasets' },
+    { order: 3, agent: 'analytics', action: 'compute_trends' },
+  ];
 }
 
 /**
@@ -201,6 +302,8 @@ export default function AgentTimeline({ events, filters }: AgentTimelineProps) {
           const agent = agentConfig[event.agent];
           const agentMeta = agent ?? { label: event.agent, color: 'bg-gray-400' };
           const runDatasetPath = getRunDatasetPath(event);
+          const selectedDatasets = extractSelectedDatasets(event.payload);
+          const executionSteps = extractExecutionSteps(event.payload);
 
           return (
             <div key={index} className="relative pl-10">
@@ -236,6 +339,44 @@ export default function AgentTimeline({ events, filters }: AgentTimelineProps) {
                     >
                       View data used in this run
                     </a>
+                  </div>
+                )}
+                {selectedDatasets.length > 0 && (
+                  <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 p-3">
+                    <div className="text-xs font-medium text-gray-700 mb-2">
+                      Selected datasets ({selectedDatasets.length})
+                    </div>
+                    <div className="space-y-1.5">
+                      {selectedDatasets.slice(0, 8).map((dataset) => (
+                        <div key={`${dataset.source}-${dataset.id}`} className="text-xs text-gray-700">
+                          <span className="font-medium">{dataset.source}</span>: {dataset.title}
+                          {typeof dataset.score === 'number' && (
+                            <span className="text-gray-500"> (score {dataset.score.toFixed(2)})</span>
+                          )}
+                        </div>
+                      ))}
+                      {selectedDatasets.length > 8 && (
+                        <div className="text-xs text-gray-500">
+                          +{selectedDatasets.length - 8} more
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {executionSteps.length > 0 && (
+                  <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 p-3">
+                    <div className="text-xs font-medium text-gray-700 mb-2">
+                      Execution Steps
+                    </div>
+                    <div className="space-y-2">
+                      {executionSteps.map((step) => (
+                        <div key={`${step.order}-${step.agent}-${step.action}`} className="text-xs text-gray-800">
+                          <div className="font-semibold">{step.order}</div>
+                          <div>{step.agent}</div>
+                          <div>{step.action}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {event.payload && Object.keys(event.payload).length > 0 && (
