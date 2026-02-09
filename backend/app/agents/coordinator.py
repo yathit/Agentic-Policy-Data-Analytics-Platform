@@ -7,12 +7,21 @@ Responsibilities:
 - Create structured analysis plan
 - Emit ReAct events for transparency
 - Stop at approval gate (HITL)
+
+Task 320: Large-pool discovery with LLM ranking and row-budget selection.
 """
 
+import json
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, List, Tuple
 
 from sqlalchemy.orm import Session
+
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 from app.llm.router import LLMRouter
 from app.schemas.events import AgentEvent, EventPhase, AgentType, event_store
@@ -60,6 +69,7 @@ class CoordinatorAgent:
         self.db = db
         self.event_sink = event_sink
         self.system_prompt = self._load_system_prompt()
+        self.ranking_prompt_template = self._load_ranking_prompt()
         self._connectors = {
             "singstat": SingStatConnector(),
             "data.gov.sg": DataGovV2Connector(),
@@ -76,6 +86,33 @@ class CoordinatorAgent:
                 f"This file is required to define the agent's behavior and capabilities. "
                 f"Please create the prompt file at '.llm/prompts/coordinator.md'."
             )
+
+    def _load_ranking_prompt(self) -> str:
+        """Load dataset ranking prompt template from file."""
+        prompt_path = Path(__file__).parents[2] / ".llm" / "prompts" / "dataset_ranking.md"
+        if prompt_path.exists():
+            return prompt_path.read_text()
+        else:
+            # Fallback to inline template if file not found
+            logger.warning(f"Dataset ranking prompt not found at '{prompt_path}', using inline fallback")
+            return """Rank these dataset candidates by relevance to the user query.
+
+User Query: "{question}"
+Entities of interest: {entities}
+Metrics of interest: {metrics}
+
+Candidates:
+{candidates}
+
+For each candidate, provide:
+- id: The dataset ID (must match exactly from the list above)
+- relevance_score: 0.0 to 1.0 (higher = more relevant to the query)
+- reason: Brief explanation of why this is or isn't relevant (1 sentence)
+- confidence: "high", "medium", or "low"
+
+Respond with JSON:
+{{"rankings": [{{"id": "...", "relevance_score": 0.85, "reason": "...", "confidence": "high"}}]}}
+"""
 
     def _emit_event(
         self, run_id: str, phase: EventPhase, message: str, payload: Dict[str, Any] = None
@@ -348,8 +385,8 @@ Respond with JSON:
             {"query": query, "sources": allowed_sources},
         )
 
-        # Discovery limits per source
-        discovery_limit = 10
+        # Task 320: Use configurable discovery limit from settings
+        discovery_limit = settings.discovery_max_candidates
 
         # Run discovery on each connector
         for source_name in allowed_sources:
@@ -450,7 +487,12 @@ Respond with JSON:
         user_constraints: Optional[Dict[str, Any]] = None,
     ) -> list[DataSource]:
         """
-        Select best-fit datasets from discovery results.
+        Select datasets using two-stage ranking and row-budget policy.
+
+        Task 320: Replaces fixed top-N selection with:
+        - Stage A: Deterministic pre-filter
+        - Stage B: LLM ranking (with fallback)
+        - Selection: Row-budget based
 
         Args:
             run_id: Run identifier
@@ -461,45 +503,156 @@ Respond with JSON:
         Returns:
             List of DataSource with discovered datasets
         """
-        sources = []
-        max_datasets_per_source = 3
-
+        # Flatten all candidates with source info
+        all_candidates: List[Tuple[DatasetCandidate, str]] = []
         for source_name, candidates in discovery_results.items():
-            if not candidates:
-                continue
+            for c in candidates:
+                c.metadata["source"] = source_name
+                all_candidates.append((c, source_name))
 
-            # Score and select top candidates
-            scored_datasets = []
-            for candidate in candidates:
-                score = self._score_dataset(candidate, intent)
-                scored_datasets.append((candidate, score))
+        if not all_candidates:
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                "No candidates found for selection",
+                {"candidate_count": 0},
+            )
+            return []
 
-            # Sort by score descending
-            scored_datasets.sort(key=lambda x: x[1], reverse=True)
+        total_candidates = len(all_candidates)
 
-            # Select top datasets
-            selected = scored_datasets[:max_datasets_per_source]
+        # Stage A: Deterministic pre-filter
+        scored = [(c, source, self._score_dataset(c, intent)) for c, source in all_candidates]
+        scored.sort(key=lambda x: x[2], reverse=True)
+        pre_filtered = scored[: settings.pre_filter_max_candidates]
+        pre_filter_count = len(pre_filtered)
 
-            datasets = [
+        self._emit_event(
+            run_id,
+            EventPhase.ACTION,
+            f"Pre-filtered to {pre_filter_count} candidates for LLM ranking",
+            {
+                "candidate_pool_size": total_candidates,
+                "pre_filter_count": pre_filter_count,
+                "pre_filter_max": settings.pre_filter_max_candidates,
+            },
+        )
+
+        # Stage B: LLM ranking
+        ranking_method = "deterministic"
+        llm_fallback_reason: Optional[str] = None
+        llm_ranked_count = 0
+
+        try:
+            llm_ranked = self._rank_with_llm(
+                run_id,
+                [c for c, _, _ in pre_filtered],
+                intent,
+            )
+
+            if llm_ranked is not None and len(llm_ranked) > 0:
+                ranking_method = "llm"
+                llm_ranked_count = len(llm_ranked)
+                # Build ranked list with source info
+                candidate_to_source = {c.uri: source for c, source, _ in pre_filtered}
+                ranked_candidates = [
+                    (c, score, reason, conf, candidate_to_source.get(c.uri, "unknown"))
+                    for c, score, reason, conf in llm_ranked
+                ]
+
+                self._emit_event(
+                    run_id,
+                    EventPhase.OBSERVATION,
+                    f"LLM ranked {llm_ranked_count} candidates",
+                    {"llm_ranked_count": llm_ranked_count, "ranking_method": "llm"},
+                )
+            else:
+                raise ValueError("LLM ranking returned empty results")
+
+        except Exception as e:
+            llm_fallback_reason = str(e)
+            logger.warning(f"LLM ranking failed, using deterministic fallback: {e}")
+
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                f"LLM ranking failed, using deterministic fallback",
+                {"fallback_reason": str(e), "ranking_method": "deterministic"},
+            )
+
+            # Use deterministic scores as fallback
+            ranked_candidates = [
+                (c, score, "", "medium", source)
+                for c, source, score in pre_filtered
+            ]
+
+        # Row-budget selection
+        selected: List[Tuple[DatasetCandidate, float, str, str, int, str]] = []
+        total_rows = 0
+        max_total = settings.selection_max_total_rows
+        max_per_dataset = settings.selection_max_rows_per_dataset
+
+        for candidate, score, reason, confidence, source_name in ranked_candidates:
+            connector = self._connectors.get(source_name)
+
+            # Get row estimate
+            if connector and hasattr(connector, "estimate_rows"):
+                try:
+                    estimated_rows = connector.estimate_rows(candidate.uri)
+                except Exception:
+                    estimated_rows = settings.row_estimate_default
+            else:
+                estimated_rows = settings.row_estimate_default
+
+            # Apply per-dataset cap
+            estimated_rows = min(estimated_rows, max_per_dataset)
+
+            # Check budget
+            if total_rows + estimated_rows <= max_total:
+                selected.append(
+                    (candidate, score, reason, confidence, estimated_rows, source_name)
+                )
+                total_rows += estimated_rows
+
+        self._emit_event(
+            run_id,
+            EventPhase.OBSERVATION,
+            f"Selected {len(selected)} datasets within {total_rows} row budget",
+            {
+                "selected_dataset_count": len(selected),
+                "selected_total_estimated_rows": total_rows,
+                "selection_budget": max_total,
+                "ranking_method_used": ranking_method,
+                "llm_ranked_count": llm_ranked_count,
+                "llm_fallback_reason": llm_fallback_reason,
+            },
+        )
+
+        # Group by source
+        sources_map: Dict[str, List[DiscoveredDataset]] = {}
+        for candidate, score, reason, confidence, est_rows, source in selected:
+            if source not in sources_map:
+                sources_map[source] = []
+
+            sources_map[source].append(
                 DiscoveredDataset(
                     id=candidate.uri,
                     title=candidate.name,
-                    score=round(score, 2),
-                    discovered_by=f"{source_name}_discovery",
+                    score=round(score, 2),  # Legacy field
+                    discovered_by=f"{source}_discovery",
+                    # Task 320 new fields
+                    relevance_score=round(score, 2),
+                    reason=reason if reason else None,
+                    confidence=confidence if confidence else None,
+                    estimated_rows=est_rows,
+                    ranking_method=ranking_method,
                 )
-                for candidate, score in selected
-            ]
+            )
 
-            if datasets:
-                sources.append(
-                    DataSource(
-                        name=source_name,
-                        datasets=datasets,
-                        format="api",
-                    )
-                )
-
-        return sources
+        return [
+            DataSource(name=source, datasets=datasets, format="api")
+            for source, datasets in sources_map.items()
+        ]
 
     def _score_dataset(self, candidate: DatasetCandidate, intent: Intent) -> float:
         """
@@ -538,6 +691,160 @@ Respond with JSON:
 
         # Cap at 1.0
         return min(score, 1.0)
+
+    def _build_ranking_prompt(
+        self,
+        candidates: List[DatasetCandidate],
+        intent: Intent,
+    ) -> str:
+        """
+        Build LLM ranking prompt for a batch of candidates.
+
+        Task 320: Used for Stage B LLM ranking.
+        Loads prompt template from .llm/prompts/dataset_ranking.md
+
+        Args:
+            candidates: Candidates to rank
+            intent: User intent for context
+
+        Returns:
+            Prompt string for LLM
+        """
+        candidate_json = [
+            {
+                "id": c.uri,
+                "title": c.name,
+                "description": c.description[:200] if c.description else "",
+            }
+            for c in candidates
+        ]
+
+        return self.ranking_prompt_template.format(
+            question=intent.question,
+            entities=intent.entities,
+            metrics=intent.metrics,
+            candidates=json.dumps(candidate_json, indent=2),
+        )
+
+    def _rank_with_llm(
+        self,
+        run_id: str,
+        candidates: List[DatasetCandidate],
+        intent: Intent,
+    ) -> Optional[List[Tuple[DatasetCandidate, float, str, str]]]:
+        """
+        Rank candidates using LLM in parallel batches.
+
+        Task 320: Stage B ranking with parallel batch processing.
+
+        Args:
+            run_id: Run identifier
+            candidates: Pre-filtered candidates to rank
+            intent: User intent for context
+
+        Returns:
+            List of (candidate, relevance_score, reason, confidence) tuples,
+            or None if ranking failed (triggers deterministic fallback)
+        """
+        batch_size = settings.llm_ranking_batch_size
+        max_parallel = settings.llm_ranking_max_parallel
+        timeout_s = settings.llm_ranking_timeout_ms / 1000
+
+        # Split candidates into batches
+        batches = [
+            candidates[i : i + batch_size]
+            for i in range(0, len(candidates), batch_size)
+        ]
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "rankings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "relevance_score": {"type": "number"},
+                            "reason": {"type": "string"},
+                            "confidence": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"],
+                            },
+                        },
+                        "required": ["id", "relevance_score"],
+                    },
+                }
+            },
+        }
+
+        def rank_batch(batch: List[DatasetCandidate]) -> Optional[dict]:
+            """Rank a single batch with LLM."""
+            try:
+                prompt = self._build_ranking_prompt(batch, intent)
+                return self.llm_router.complete(
+                    task_name="dataset_ranking",
+                    prompt=prompt,
+                    system_prompt=self.system_prompt,
+                    schema=schema,
+                    temperature=0.3,
+                    timeout_s=int(timeout_s),
+                )
+            except Exception as e:
+                logger.warning(f"LLM ranking batch failed: {e}")
+                return None
+
+        # Run batches in parallel with ThreadPoolExecutor
+        results: List[Tuple[List[DatasetCandidate], Optional[dict]]] = []
+
+        try:
+            with ThreadPoolExecutor(max_workers=max_parallel) as executor:
+                future_to_batch = {
+                    executor.submit(rank_batch, batch): batch for batch in batches
+                }
+
+                for future in as_completed(future_to_batch, timeout=timeout_s * 2):
+                    batch = future_to_batch[future]
+                    try:
+                        result = future.result(timeout=timeout_s)
+                        results.append((batch, result))
+                    except Exception as e:
+                        logger.warning(f"LLM ranking batch exception: {e}")
+                        results.append((batch, None))
+
+        except Exception as e:
+            logger.error(f"LLM ranking parallel execution failed: {e}")
+            return None
+
+        # Check if any batch failed completely
+        if all(r[1] is None for r in results):
+            return None
+
+        # Merge results
+        ranked: List[Tuple[DatasetCandidate, float, str, str]] = []
+        for batch, result in results:
+            if result is None:
+                continue
+
+            batch_map = {c.uri: c for c in batch}
+            rankings = result.get("rankings", [])
+
+            for r in rankings:
+                candidate_id = r.get("id")
+                if candidate_id and candidate_id in batch_map:
+                    ranked.append(
+                        (
+                            batch_map[candidate_id],
+                            float(r.get("relevance_score", 0.0)),
+                            r.get("reason", ""),
+                            r.get("confidence", "medium"),
+                        )
+                    )
+
+        # Sort by relevance score descending
+        ranked.sort(key=lambda x: x[1], reverse=True)
+
+        return ranked if ranked else None
 
     def _create_extraction_steps(
         self, run_id: str, intent: Intent, sources: list[DataSource]

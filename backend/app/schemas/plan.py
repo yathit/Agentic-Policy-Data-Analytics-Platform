@@ -35,8 +35,15 @@ class DiscoveredDataset(BaseModel):
 
     id: str = Field(..., description="Dataset ID or reference URI")
     title: str = Field(..., description="Human-readable dataset title")
-    score: float = Field(default=0.0, description="Relevance score (0-1)")
+    score: float = Field(default=0.0, description="Relevance score (0-1) - legacy, use relevance_score")
     discovered_by: str = Field(..., description="Discovery method or connector name")
+
+    # Task 320: LLM ranking fields
+    relevance_score: float = Field(default=0.0, description="Relevance score (0-1) from LLM or deterministic")
+    reason: Optional[str] = Field(default=None, description="LLM-provided reason for relevance")
+    confidence: Optional[str] = Field(default=None, description="Confidence level: high, medium, low")
+    estimated_rows: int = Field(default=1000, description="Pre-fetch row estimate")
+    ranking_method: str = Field(default="deterministic", description="Ranking method: llm or deterministic")
 
 
 class DataSource(BaseModel):
@@ -68,6 +75,20 @@ class DiscoveryStep(BaseModel):
     )
     limit: Optional[int] = Field(
         default=None, description="The limit applied to discovery results"
+    )
+
+    # Task 320: Ranking transparency fields
+    pre_filter_count: Optional[int] = Field(
+        default=None, description="Candidates remaining after deterministic pre-filter"
+    )
+    llm_ranked_count: Optional[int] = Field(
+        default=None, description="Candidates ranked by LLM"
+    )
+    ranking_method_used: Optional[str] = Field(
+        default=None, description="Final ranking method: llm or deterministic"
+    )
+    llm_fallback_reason: Optional[str] = Field(
+        default=None, description="Reason for falling back to deterministic ranking"
     )
 
 

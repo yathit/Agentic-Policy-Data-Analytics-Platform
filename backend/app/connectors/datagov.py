@@ -61,7 +61,7 @@ class DataGovV2Connector(BaseConnector):
         self,
         intent: str,
         db: Optional["Session"] = None,
-        limit: int = 10,
+        limit: Optional[int] = None,
     ) -> List[DatasetCandidate]:
         """
         Discover datasets from cached collections in the database.
@@ -76,11 +76,16 @@ class DataGovV2Connector(BaseConnector):
         Args:
             intent: Search keyword (e.g., "employment statistics")
             db: SQLAlchemy database session (required for discovery)
-            limit: Maximum number of datasets to return (default: 10)
+            limit: Maximum number of datasets to return (uses config default if None)
 
         Returns:
             List of DatasetCandidate objects with uri = dataset_id
         """
+        from app.core.config import settings
+
+        # Task 320: Use configurable limit from settings
+        if limit is None:
+            limit = settings.discovery_max_candidates
         if db is None:
             logger.warning(
                 "discover() called without db session; returning empty list"
@@ -496,3 +501,41 @@ class DataGovV2Connector(BaseConnector):
             "license_info": "Singapore Open Data License",
             "dataset_id": dataset_ref,
         }
+
+    def estimate_rows(self, dataset_ref: str) -> int:
+        """
+        Estimate row count using first-page metadata from list-rows API.
+
+        Task 320: Used for row-budget based selection.
+        The V2 API may return a 'total' field in the first page response.
+
+        Args:
+            dataset_ref: Dataset ID
+
+        Returns:
+            Estimated row count (uses default if unavailable)
+        """
+        from app.core.config import settings
+
+        try:
+            url = f"{self.API_BASE_V2}/datasets/{dataset_ref}/list-rows"
+            response = self._make_request_with_retry(url)
+
+            if response and "data" in response:
+                data = response["data"]
+                # Check for total field in response
+                total = data.get("total")
+                if total is not None:
+                    return int(total)
+                # Fall back to counting rows in first page
+                rows = data.get("rows", [])
+                if rows:
+                    # If there's a next link, estimate based on page size
+                    if data.get("links", {}).get("next"):
+                        # Assume at least 2x the page size
+                        return len(rows) * 2
+                    return len(rows)
+        except Exception as e:
+            logger.warning(f"Row estimation failed for {dataset_ref}: {e}")
+
+        return settings.row_estimate_default
