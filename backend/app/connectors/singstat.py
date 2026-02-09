@@ -104,7 +104,6 @@ class SingStatConnector(BaseConnector):
             if self.prefer_time_series:
                 candidates_list = self._prioritize_time_series(candidates_list)
 
-            # Task 320: Use configurable limit from settings
             from app.core.config import settings
             max_results = settings.discovery_max_candidates
             return candidates_list[:max_results]
@@ -1056,7 +1055,6 @@ class SingStatConnector(BaseConnector):
         """
         Estimate row count for a SingStat dataset.
 
-        Task 320: Used for row-budget based selection.
         Attempts to get row count from tableinfo API if available.
 
         Args:

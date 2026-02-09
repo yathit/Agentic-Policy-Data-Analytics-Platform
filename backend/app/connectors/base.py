@@ -23,7 +23,7 @@ class DatasetCandidate:
     format: str
     uri: str
     metadata: Dict[str, Any]
-    estimated_rows: Optional[int] = None  # Task 320: Pre-fetch row estimate
+    estimated_rows: Optional[int] = None
 
 
 @dataclass
@@ -143,7 +143,6 @@ class BaseConnector(ABC):
         """
         Estimate row count for a dataset before full fetch.
 
-        Task 320: Used for row-budget based selection.
         Subclasses can override with source-specific estimation logic.
 
         Args:

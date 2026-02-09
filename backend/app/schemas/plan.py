@@ -38,7 +38,7 @@ class DiscoveredDataset(BaseModel):
     score: float = Field(default=0.0, description="Relevance score (0-1) - legacy, use relevance_score")
     discovered_by: str = Field(..., description="Discovery method or connector name")
 
-    # Task 320: LLM ranking fields
+    # LLM ranking fields
     relevance_score: float = Field(default=0.0, description="Relevance score (0-1) from LLM or deterministic")
     reason: Optional[str] = Field(default=None, description="LLM-provided reason for relevance")
     confidence: Optional[str] = Field(default=None, description="Confidence level: high, medium, low")
@@ -77,7 +77,7 @@ class DiscoveryStep(BaseModel):
         default=None, description="The limit applied to discovery results"
     )
 
-    # Task 320: Ranking transparency fields
+    # Ranking transparency fields
     pre_filter_count: Optional[int] = Field(
         default=None, description="Candidates remaining after deterministic pre-filter"
     )

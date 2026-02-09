@@ -7,8 +7,6 @@ Responsibilities:
 - Create structured analysis plan
 - Emit ReAct events for transparency
 - Stop at approval gate (HITL)
-
-Task 320: Large-pool discovery with LLM ranking and row-budget selection.
 """
 
 import json

@@ -83,7 +83,6 @@ class DataGovV2Connector(BaseConnector):
         """
         from app.core.config import settings
 
-        # Task 320: Use configurable limit from settings
         if limit is None:
             limit = settings.discovery_max_candidates
         if db is None:
@@ -506,7 +505,6 @@ class DataGovV2Connector(BaseConnector):
         """
         Estimate row count using first-page metadata from list-rows API.
 
-        Task 320: Used for row-budget based selection.
         The V2 API may return a 'total' field in the first page response.
 
         Args:

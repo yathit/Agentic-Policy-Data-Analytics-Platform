@@ -29,17 +29,17 @@ class Settings(BaseSettings):
     # Analytics settings - Demo mode: bypass time range filtering
     analytics_bypass_time_filter: bool = True  # Set to True to bypass time range filtering for demo
 
-    # Discovery settings (Task 320)
+    # Discovery settings
     discovery_max_candidates: int = 1000  # Max candidates to retrieve across all sources
     discovery_page_size: int = 100  # Batch size for paginated retrieval
     pre_filter_max_candidates: int = 200  # Max candidates to send to LLM ranking
 
-    # LLM ranking settings (Task 320)
+    # LLM ranking settings
     llm_ranking_batch_size: int = 20  # Candidates per LLM ranking call
     llm_ranking_timeout_ms: int = 30000  # Timeout before falling back to deterministic
     llm_ranking_max_parallel: int = 5  # Max concurrent LLM ranking requests
 
-    # Selection settings (Task 320)
+    # Selection settings
     selection_max_total_rows: int = 200000  # Total row budget for selected datasets
     selection_max_rows_per_dataset: int = 50000  # Per-dataset row cap
     row_estimate_default: int = 1000  # Conservative default when estimation unavailable
