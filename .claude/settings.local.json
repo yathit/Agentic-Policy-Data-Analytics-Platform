@@ -19,7 +19,8 @@
       "Bash(docker logs:*)",
       "Bash(docker restart:*)",
       "Bash(docker exec:*)",
-      "Bash(git mv:*)"
+      "Bash(git mv:*)",
+      "Bash(docker-compose:*)"
     ]
   }
 }

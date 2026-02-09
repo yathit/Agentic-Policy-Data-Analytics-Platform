@@ -275,7 +275,7 @@ class AnalyticsAgent:
             return None
 
         time_range = approved_plan.intent.time_range if approved_plan and approved_plan.intent else None
-        if time_range:
+        if time_range and not settings.analytics_bypass_time_filter:
             try:
                 start_year = int(time_range.start)
                 end_year = int(time_range.end)
@@ -305,12 +305,26 @@ class AnalyticsAgent:
                         }
                     },
                 )
-
-        if series_df.empty:
+        elif time_range and settings.analytics_bypass_time_filter:
             self._emit_event(
                 run_id,
                 EventPhase.OBSERVATION,
-                "No data available after applying time range filter",
+                "Time range filter bypassed (demo mode enabled)",
+                {
+                    "time_range": {
+                        "start": time_range.start,
+                        "end": time_range.end,
+                    },
+                    "bypass_enabled": True,
+                },
+            )
+
+        if series_df.empty:
+            filter_msg = "No data available after applying time range filter" if (time_range and not settings.analytics_bypass_time_filter) else "No data available in dataset"
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                filter_msg,
                 {"time_range": {"start": time_range.start, "end": time_range.end}}
                 if time_range
                 else {},

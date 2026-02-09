@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     data_gov_sg_ingest_startup_if_empty: bool = True
     data_gov_sg_api_key: str | None = None
 
+    # Analytics settings - Demo mode: bypass time range filtering
+    analytics_bypass_time_filter: bool = True  # Set to True to bypass time range filtering for demo
+
     @property
     def database_url(self) -> str:
         """Construct database URL."""
