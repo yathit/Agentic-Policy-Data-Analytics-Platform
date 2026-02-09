@@ -3,7 +3,18 @@ Database models for runs, plans, events, and artifacts.
 """
 
 import uuid
-from sqlalchemy import Column, String, DateTime, JSON, Text, ForeignKey, Integer, Enum as SQLEnum
+from sqlalchemy import (
+    Column,
+    String,
+    DateTime,
+    JSON,
+    Text,
+    ForeignKey,
+    Integer,
+    Enum as SQLEnum,
+    Boolean,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import UUID
@@ -14,6 +25,7 @@ from app.core.database import Base
 
 class RunStatus(str, enum.Enum):
     """Run status values."""
+    PLANNING = "planning"  # Plan generation in progress
     AWAITING_APPROVAL = "awaiting_approval"
     QUEUED = "queued"
     RUNNING = "running"
@@ -33,7 +45,11 @@ class Run(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     query = Column(Text, nullable=False)
     status = Column(
-        SQLEnum(RunStatus, name="run_status"),
+        SQLEnum(
+            RunStatus,
+            name="run_status",
+            values_callable=lambda x: [e.value for e in x]
+        ),
         nullable=False,
         default=RunStatus.AWAITING_APPROVAL
     )
@@ -144,3 +160,26 @@ class Artifact(Base):
 
     def __repr__(self):
         return f"<Artifact(id={self.id}, run_id={self.run_id})>"
+
+
+class RunDatasetSnapshot(Base):
+    """
+    Run-scoped snapshot of the cleaned dataset used during execution.
+    """
+
+    __tablename__ = "run_dataset_snapshots"
+    __table_args__ = (
+        UniqueConstraint("run_id", "dataset_id", name="uq_run_dataset_snapshot"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True)
+    columns = Column(JSON, nullable=False)
+    rows = Column(JSON, nullable=False)
+    total_row_count = Column(Integer, nullable=False)
+    is_truncated = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    def __repr__(self):
+        return f"<RunDatasetSnapshot(run_id={self.run_id}, dataset_id={self.dataset_id})>"

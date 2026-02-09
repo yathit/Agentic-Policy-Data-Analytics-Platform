@@ -196,6 +196,7 @@ class ExtractionAgent:
                     source_type=step.source,
                     dataset_ref=step.dataset_ref,
                     name=f"{step.source}_{step.dataset_ref}",
+                    run_id=run_id,
                 )
 
                 # Get validation report
@@ -205,18 +206,33 @@ class ExtractionAgent:
                     else None
                 )
 
+                # Build provenance links for transparency
+                provenance = dataset.provenance
+                source_uri = provenance.source_uri if provenance else None
+                portal_url = None
+
+                # Generate portal URL for known sources
+                if step.source == "data.gov.sg":
+                    portal_url = f"https://data.gov.sg/datasets/{step.dataset_ref}/view"
+                elif step.source == "singstat":
+                    portal_url = f"https://tablebuilder.singstat.gov.sg/table/{step.dataset_ref}"
+
                 self._emit_event(
                     run_id,
                     EventPhase.OBSERVATION,
                     f"Retrieved {dataset.row_count} rows, {dataset.column_count} columns. Status: {dataset.status}",
                     {
                         "dataset_id": dataset.id,
+                        "dataset_name": dataset.name,
+                        "dataset_ref": step.dataset_ref,
                         "row_count": dataset.row_count,
                         "column_count": dataset.column_count,
                         "status": dataset.status,
                         "completeness_score": (
                             validation.completeness_score if validation else None
                         ),
+                        "source_uri": source_uri,
+                        "portal_url": portal_url,
                     },
                 )
 
@@ -224,7 +240,10 @@ class ExtractionAgent:
                     run_id,
                     EventPhase.DECISION,
                     f"Dataset {dataset.id} successfully extracted and validated",
-                    {"dataset_id": dataset.id},
+                    {
+                        "dataset_id": dataset.id,
+                        "run_dataset_url": f"/runs/{run_id}/datasets/{dataset.id}",
+                    },
                 )
 
                 return ExtractionResult(dataset=dataset, success=True)

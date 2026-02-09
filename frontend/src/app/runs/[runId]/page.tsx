@@ -7,6 +7,7 @@ import { WebSocketClient } from '@/lib/ws';
 import type { Run, Plan, Artifacts, AgentEvent } from '@/lib/types';
 import RunStatusBadge from '@/components/RunStatusBadge';
 import PlanReviewCard from '@/components/PlanReviewCard';
+import PlanningProgressPanel from '@/components/PlanningProgressPanel';
 import EventLog from '@/components/EventLog';
 import ArtifactsPanel from '@/components/ArtifactsPanel';
 import ExportButtons from '@/components/ExportButtons';
@@ -98,25 +99,33 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
   // Fallback polling when WebSocket is disconnected
   useEffect(() => {
     if (wsStatus === 'connected') return;
-    if (!run || !['queued', 'running'].includes(run.status)) return;
+    // Poll during planning, queued, or running status
+    if (!run || !['planning', 'queued', 'running'].includes(run.status)) return;
+
+    // Poll more frequently during planning (2s) vs running (5s)
+    const pollInterval = run.status === 'planning' ? 2000 : 5000;
 
     const statusInterval = setInterval(async () => {
       try {
         const runData = await getRun(runId);
         setRun(runData);
-        if (runData.status !== 'running') {
+        // Update plan when transitioning from planning to awaiting_approval
+        if (runData.plan && !plan) {
+          setPlan(runData.plan);
+        }
+        if (runData.status !== 'running' && runData.status !== 'planning') {
           const artifactsData = await getRunArtifacts(runId);
           setArtifacts(artifactsData);
         }
       } catch {
         // Ignore errors during polling
       }
-    }, 5000);
+    }, pollInterval);
 
     return () => {
       clearInterval(statusInterval);
     };
-  }, [run?.status, runId, wsStatus]);
+  }, [run?.status, runId, wsStatus, plan]);
 
   // Handle plan approval
   const handleApprove = async (edits?: { time_range?: { start: string; end: string }; sources?: string[] }) => {
@@ -268,12 +277,39 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
           )}
         </div>
 
-        {/* Error summary */}
+        {/* Error summary with retry option */}
         {run.error_summary && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-            <h3 className="font-medium text-red-800 mb-1">Error</h3>
-            <p className="text-sm text-red-700">{run.error_summary}</p>
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="font-medium text-red-800 mb-1">
+                  {run.error_summary.includes('Planning failed') ? 'Plan Generation Failed' : 'Error'}
+                </h3>
+                <p className="text-sm text-red-700">{run.error_summary}</p>
+              </div>
+              {run.status === 'failed' && (
+                <Link
+                  href="/"
+                  className="shrink-0 ml-4 px-4 py-2 bg-red-100 text-red-700 text-sm font-medium rounded-lg hover:bg-red-200 transition-colors"
+                >
+                  Try Again
+                </Link>
+              )}
+            </div>
+            {run.error_summary.includes('Planning failed') && (
+              <p className="mt-2 text-xs text-red-600">
+                Tip: Try rephrasing your query with more specific terms or selecting different data sources.
+              </p>
+            )}
           </div>
+        )}
+
+        {/* Planning Progress Panel (for planning status) */}
+        {run.status === 'planning' && (
+          <PlanningProgressPanel
+            events={events}
+            startedAt={run.created_at}
+          />
         )}
 
         {/* Live Activity Status */}
@@ -317,7 +353,7 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
                       Connecting
                     </span>
                   )}
-                  {wsStatus === 'disconnected' && run.status === 'running' && (
+                  {wsStatus === 'disconnected' && (run.status === 'running' || run.status === 'planning') && (
                     <span className="flex items-center gap-1 text-gray-500">
                       <span className="w-2 h-2 bg-gray-400 rounded-full" />
                       Polling
@@ -348,6 +384,14 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
                           {step.agent}:
                         </span>{' '}
                         <span className="text-gray-700">{step.action}</span>
+                        <details className="mt-2">
+                          <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">
+                            View payload
+                          </summary>
+                          <pre className="mt-2 p-2 bg-gray-50 border border-gray-200 rounded text-xs text-gray-700 overflow-x-auto">
+                            {JSON.stringify(step.inputs ?? {}, null, 2)}
+                          </pre>
+                        </details>
                       </div>
                     </div>
                   ))}

@@ -9,6 +9,12 @@ const statusConfig: Record<
   RunStatus,
   { label: string; bgColor: string; textColor: string; dotColor: string }
 > = {
+  planning: {
+    label: 'Building Plan',
+    bgColor: 'bg-indigo-100',
+    textColor: 'text-indigo-700',
+    dotColor: 'bg-indigo-500 animate-pulse',
+  },
   queued: {
     label: 'Queued',
     bgColor: 'bg-gray-100',

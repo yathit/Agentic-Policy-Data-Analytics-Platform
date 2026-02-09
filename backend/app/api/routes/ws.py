@@ -80,12 +80,44 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _plan_to_dict(plan) -> dict:
+    """Convert Plan to dictionary for WebSocket response."""
+    if not plan:
+        return None
+
+    import uuid as uuid_module
+    steps = []
+    for step in plan.steps or []:
+        steps.append({
+            "id": step.get("id", str(uuid_module.uuid4())),
+            "agent": step.get("agent", "coordinator"),
+            "action": step.get("action", ""),
+            "inputs": step.get("inputs", {}),
+            "requires_approval": step.get("requires_approval", False),
+        })
+
+    rationale = None
+    if plan.source_rationale:
+        rationale = [
+            {"source": r.get("source", ""), "why": r.get("why", "")}
+            for r in plan.source_rationale
+        ]
+
+    return {
+        "id": str(plan.id),
+        "version": plan.version,
+        "steps": steps,
+        "source_rationale": rationale,
+    }
+
+
 def _run_to_dict(run: Run) -> dict:
     """Convert Run to dictionary for WebSocket response."""
     return {
         "id": str(run.id),
         "query": run.query,
         "status": run.status.value if isinstance(run.status, RunStatus) else run.status,
+        "plan": _plan_to_dict(run.plan) if run.plan else None,
         "constraints": run.constraints,
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
@@ -176,6 +208,7 @@ async def websocket_run_events(websocket: WebSocket, run_id: str):
 
         # Poll for new events on a short interval without waiting on client messages
         last_event_ts = events[-1].ts if events else datetime.min
+        last_status = run_data["status"]
         poll_interval = 1.0
         heartbeat_interval = 30.0
         last_heartbeat = asyncio.get_running_loop().time()
@@ -210,21 +243,36 @@ async def websocket_run_events(websocket: WebSocket, run_id: str):
                         })
                         last_event_ts = event.ts
 
-                    # Check if run is completed
+                    # Check run status for updates
                     run = db.query(Run).filter(Run.id == run_uuid).first()
-                    if run and run.status in [
-                        RunStatus.COMPLETED,
-                        RunStatus.FAILED,
-                        RunStatus.ABORTED,
-                    ]:
-                        # Send final status update and close
-                        await websocket.send_json({
-                            "type": "status",
-                            "status": run.status.value,
-                            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-                        })
-                        await asyncio.sleep(1)
-                        break
+                    if run:
+                        current_status = run.status.value if isinstance(run.status, RunStatus) else run.status
+
+                        # Send status update if status changed (e.g., planning -> awaiting_approval)
+                        if current_status != last_status:
+                            await websocket.send_json({
+                                "type": "status",
+                                "status": current_status,
+                                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                            })
+                            last_status = current_status
+
+                            # Also send updated run data with plan if transitioning to awaiting_approval
+                            if current_status == "awaiting_approval":
+                                await websocket.send_json({
+                                    "type": "snapshot",
+                                    "run": _run_to_dict(run),
+                                    "events": [],  # Events already sent incrementally
+                                })
+
+                        # Close connection on terminal states
+                        if run.status in [
+                            RunStatus.COMPLETED,
+                            RunStatus.FAILED,
+                            RunStatus.ABORTED,
+                        ]:
+                            await asyncio.sleep(1)
+                            break
 
                 finally:
                     db.close()

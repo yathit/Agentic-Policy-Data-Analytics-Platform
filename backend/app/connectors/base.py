@@ -23,6 +23,7 @@ class DatasetCandidate:
     format: str
     uri: str
     metadata: Dict[str, Any]
+    estimated_rows: Optional[int] = None
 
 
 @dataclass
@@ -137,6 +138,21 @@ class BaseConnector(ABC):
             Cleaned DataFrame and cleaning logs
         """
         pass
+
+    def estimate_rows(self, dataset_ref: str) -> int:
+        """
+        Estimate row count for a dataset before full fetch.
+
+        Subclasses can override with source-specific estimation logic.
+
+        Args:
+            dataset_ref: Reference to the dataset
+
+        Returns:
+            Estimated row count (uses default if unavailable)
+        """
+        from app.core.config import settings
+        return settings.row_estimate_default
 
     def fetch_and_parse(
         self, dataset_ref: str, format_hint: Optional[str] = None

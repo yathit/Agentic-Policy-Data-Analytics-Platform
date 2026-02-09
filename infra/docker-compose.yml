@@ -52,6 +52,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       DATA_GOV_SG_API_KEY: ${DATA_GOV_SG_API_KEY}
+      # Analytics settings
+      ANALYTICS_BYPASS_TIME_FILTER: ${ANALYTICS_BYPASS_TIME_FILTER:-False}
     ports:
       - "8000:8000"
       - "5678:5678"
@@ -107,6 +109,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       DATA_GOV_SG_API_KEY: ${DATA_GOV_SG_API_KEY}
+      # Analytics settings
+      ANALYTICS_BYPASS_TIME_FILTER: ${ANALYTICS_BYPASS_TIME_FILTER:-False}
     volumes:
       - ../backend/app:/app/app
       - ../.llm:/app/.llm

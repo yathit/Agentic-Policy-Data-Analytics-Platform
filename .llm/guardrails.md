@@ -30,3 +30,19 @@ docker run --rm -it -p 3000:3000 -e NEXT_PUBLIC_API_URL=http://localhost:8000 -v
 ```
 
 In dev mode, changes to frontend source files are automatically picked up - no rebuild needed.
+
+## Code Comments
+
+### What NOT to write
+
+- **Task/ticket references**: Do not add comments like `# Task 320: ...` or `// JIRA-123: ...`. The git history and task management system track this.
+- **Obvious comments**: Do not comment what the code clearly does (e.g., `# increment counter` above `counter += 1`)
+- **Changelog comments**: Do not add `# Added on 2024-01-15` or similar. Git tracks this.
+- **Author comments**: Do not add `# Written by John` or similar.
+
+### What TO write
+
+- **Why, not what**: Explain non-obvious business logic or design decisions
+- **Warnings**: Alert about edge cases, gotchas, or important constraints
+- **TODOs**: Mark incomplete work that needs follow-up (but prefer creating tasks)
+- **Complex algorithms**: Explain the approach for genuinely complex logic

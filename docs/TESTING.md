@@ -30,19 +30,21 @@ backend/tests/
 ### Run All Tests (Excluding Integration)
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest -v
+docker-compose -f infra/docker-compose.yml exec api pytest -v
 ```
+
+
 
 ### Run All Tests (Including Integration)
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest -v -m ""
+docker-compose -f infra/docker-compose.yml exec api pytest -v -m ""
 ```
 
 ### Run with Coverage
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest --cov=app tests/
+docker-compose -f infra/docker-compose.yml exec api pytest --cov=app tests/
 ```
 
 ---
@@ -55,7 +57,7 @@ Fast, deterministic tests that do not require network access or external service
 
 **Run unit tests only:**
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest tests/ -v -m "not integration"
+docker-compose -f infra/docker-compose.yml exec api pytest tests/ -v -m "not integration"
 ```
 
 **Location:** `tests/test_*.py`, `tests/unit/`
@@ -71,12 +73,12 @@ Tests that make real API calls to external services. Marked with `@pytest.mark.i
 
 **Run integration tests only:**
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest tests/integration/ -v
+docker-compose -f infra/docker-compose.yml exec api pytest tests/integration/ -v
 ```
 
 **Skip in CI (default behavior):**
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest -m "not integration"
+docker-compose -f infra/docker-compose.yml exec api pytest -m "not integration"
 ```
 
 **Location:** `tests/integration/`
@@ -97,7 +99,7 @@ docker compose -f infra/docker-compose.yml exec api pytest -m "not integration"
 Fast, offline tests for SingStat connector functionality:
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py::TestSingStatConnector -v
+docker-compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py::TestSingStatConnector -v
 ```
 
 #### Integration Smoke Test (`tests/integration/test_singstat.py`)
@@ -108,7 +110,7 @@ End-to-end smoke test against the live SingStat Table Builder Developer API.
 
 **Run the smoke test:**
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest tests/integration/test_singstat.py -v
+docker-compose -f infra/docker-compose.yml exec api pytest tests/integration/test_singstat.py -v
 ```
 
 **Test configuration:**
@@ -152,7 +154,7 @@ docker compose -f infra/docker-compose.yml exec api pytest tests/integration/tes
 #### Integration Tests (`tests/integration/test_datagov.py`)
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest tests/integration/test_datagov.py -v
+docker-compose -f infra/docker-compose.yml exec api pytest tests/integration/test_datagov.py -v
 ```
 
 **Test cases:**
@@ -174,38 +176,38 @@ docker compose -f infra/docker-compose.yml exec api pytest tests/integration/tes
 
 ```bash
 # Single test file
-docker compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py -v
+docker-compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py -v
 
 # Multiple files
-docker compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py tests/test_health.py -v
+docker-compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py tests/test_health.py -v
 ```
 
 ### By Class
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py::TestSingStatConnector -v
+docker-compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py::TestSingStatConnector -v
 ```
 
 ### By Test Name
 
 ```bash
 # Exact match
-docker compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py::TestSingStatConnector::test_parse_json -v
+docker-compose -f infra/docker-compose.yml exec api pytest tests/test_connectors.py::TestSingStatConnector::test_parse_json -v
 
 # Pattern match
-docker compose -f infra/docker-compose.yml exec api pytest -k "parse" -v
-docker compose -f infra/docker-compose.yml exec api pytest -k "singstat" -v
-docker compose -f infra/docker-compose.yml exec api pytest -k "validate and not empty" -v
+docker-compose -f infra/docker-compose.yml exec api pytest -k "parse" -v
+docker-compose -f infra/docker-compose.yml exec api pytest -k "singstat" -v
+docker-compose -f infra/docker-compose.yml exec api pytest -k "validate and not empty" -v
 ```
 
 ### By Marker
 
 ```bash
 # Only integration tests
-docker compose -f infra/docker-compose.yml exec api pytest -m integration -v
+docker-compose -f infra/docker-compose.yml exec api pytest -m integration -v
 
 # Exclude integration tests
-docker compose -f infra/docker-compose.yml exec api pytest -m "not integration" -v
+docker-compose -f infra/docker-compose.yml exec api pytest -m "not integration" -v
 ```
 
 ---
@@ -241,13 +243,13 @@ def test_api_endpoint(client):
 ### Generate Coverage Report
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest --cov=app --cov-report=term-missing tests/
+docker-compose -f infra/docker-compose.yml exec api pytest --cov=app --cov-report=term-missing tests/
 ```
 
 ### HTML Coverage Report
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest --cov=app --cov-report=html tests/
+docker-compose -f infra/docker-compose.yml exec api pytest --cov=app --cov-report=html tests/
 ```
 
 Report saved to `htmlcov/index.html`.
@@ -257,7 +259,7 @@ Report saved to `htmlcov/index.html`.
 Current target: **80% line coverage**
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest --cov=app --cov-fail-under=80 tests/
+docker-compose -f infra/docker-compose.yml exec api pytest --cov=app --cov-fail-under=80 tests/
 ```
 
 ---
@@ -267,31 +269,31 @@ docker compose -f infra/docker-compose.yml exec api pytest --cov=app --cov-fail-
 ### Verbose Output
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest -vvv tests/
+docker-compose -f infra/docker-compose.yml exec api pytest -vvv tests/
 ```
 
 ### Show Print Statements
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest -s tests/
+docker-compose -f infra/docker-compose.yml exec api pytest -s tests/
 ```
 
 ### Stop on First Failure
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest -x tests/
+docker-compose -f infra/docker-compose.yml exec api pytest -x tests/
 ```
 
 ### Enter Debugger on Failure
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest --pdb tests/
+docker-compose -f infra/docker-compose.yml exec api pytest --pdb tests/
 ```
 
 ### Run Last Failed Tests
 
 ```bash
-docker compose -f infra/docker-compose.yml exec api pytest --lf tests/
+docker-compose -f infra/docker-compose.yml exec api pytest --lf tests/
 ```
 
 ---
@@ -422,29 +424,29 @@ pytest -m "not integration" -v
 **Database connection issues:**
 ```bash
 # Check PostgreSQL is running
-docker compose -f infra/docker-compose.yml ps postgres
+docker-compose -f infra/docker-compose.yml ps postgres
 ```
 
 ### Import Errors
 
 **Missing dependencies:**
 ```bash
-docker compose -f infra/docker-compose.yml exec api poetry install
+docker-compose -f infra/docker-compose.yml exec api poetry install
 ```
 
 ### Database State Issues
 
 **Reset test database:**
 ```bash
-docker compose -f infra/docker-compose.yml down -v
-docker compose -f infra/docker-compose.yml up -d
+docker-compose -f infra/docker-compose.yml down -v
+docker-compose -f infra/docker-compose.yml up -d
 ```
 
 ### Stale Test Cache
 
 **Clear pytest cache:**
 ```bash
-docker compose -f infra/docker-compose.yml exec api rm -rf .pytest_cache
+docker-compose -f infra/docker-compose.yml exec api rm -rf .pytest_cache
 ```
 
 ---

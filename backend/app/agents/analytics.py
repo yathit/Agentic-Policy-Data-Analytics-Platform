@@ -274,25 +274,47 @@ class AnalyticsAgent:
             )
             return None
 
+        unfiltered_series_df = series_df.copy()
         time_range = approved_plan.intent.time_range if approved_plan and approved_plan.intent else None
-        if time_range:
+        if time_range and not settings.analytics_bypass_time_filter:
             try:
                 start_year = int(time_range.start)
                 end_year = int(time_range.end)
-                series_df = series_df.loc[
+                filtered_series_df = series_df.loc[
                     (series_df.index >= start_year) & (series_df.index <= end_year)
                 ]
-                self._emit_event(
-                    run_id,
-                    EventPhase.OBSERVATION,
-                    "Applied time range filter for trend analysis",
-                    {
-                        "time_range": {
-                            "start": start_year,
-                            "end": end_year,
-                        }
-                    },
-                )
+
+                if filtered_series_df.empty and not unfiltered_series_df.empty:
+                    series_df = unfiltered_series_df
+                    self._emit_event(
+                        run_id,
+                        EventPhase.OBSERVATION,
+                        "Time range filter returned no rows; using unfiltered data for demo",
+                        {
+                            "requested_time_range": {
+                                "start": start_year,
+                                "end": end_year,
+                            },
+                            "available_time_range": {
+                                "start": int(unfiltered_series_df.index.min()),
+                                "end": int(unfiltered_series_df.index.max()),
+                            },
+                            "fallback_applied": True,
+                        },
+                    )
+                else:
+                    series_df = filtered_series_df
+                    self._emit_event(
+                        run_id,
+                        EventPhase.OBSERVATION,
+                        "Applied time range filter for trend analysis",
+                        {
+                            "time_range": {
+                                "start": start_year,
+                                "end": end_year,
+                            }
+                        },
+                    )
             except (TypeError, ValueError):
                 self._emit_event(
                     run_id,
@@ -305,12 +327,26 @@ class AnalyticsAgent:
                         }
                     },
                 )
-
-        if series_df.empty:
+        elif time_range and settings.analytics_bypass_time_filter:
             self._emit_event(
                 run_id,
                 EventPhase.OBSERVATION,
-                "No data available after applying time range filter",
+                "Time range filter bypassed (demo mode enabled)",
+                {
+                    "time_range": {
+                        "start": time_range.start,
+                        "end": time_range.end,
+                    },
+                    "bypass_enabled": True,
+                },
+            )
+
+        if series_df.empty:
+            filter_msg = "No data available after applying time range filter" if (time_range and not settings.analytics_bypass_time_filter) else "No data available in dataset"
+            self._emit_event(
+                run_id,
+                EventPhase.OBSERVATION,
+                filter_msg,
                 {"time_range": {"start": time_range.start, "end": time_range.end}}
                 if time_range
                 else {},

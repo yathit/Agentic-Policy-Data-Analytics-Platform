@@ -1,5 +1,6 @@
 // Run status types
 export type RunStatus =
+  | 'planning'
   | 'queued'
   | 'needs_approval'
   | 'awaiting_approval'
@@ -145,6 +146,18 @@ export interface Artifacts {
   report_pdf?: string;
 }
 
+export interface RunDatasetSnapshot {
+  run_id: string;
+  dataset_id: number;
+  dataset_name: string;
+  source_uri?: string;
+  columns: string[];
+  rows: (string | number | boolean | null)[][];
+  total_row_count: number;
+  is_truncated: boolean;
+  created_at: string;
+}
+
 // API request/response types
 export interface CreateRunRequest {
   query: string;
@@ -153,7 +166,7 @@ export interface CreateRunRequest {
 
 export interface CreateRunResponse {
   run: Run;
-  plan: Plan;
+  plan?: Plan;  // May be null during planning status
 }
 
 export interface ApproveRunRequest {

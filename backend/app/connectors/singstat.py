@@ -104,7 +104,9 @@ class SingStatConnector(BaseConnector):
             if self.prefer_time_series:
                 candidates_list = self._prioritize_time_series(candidates_list)
 
-            return candidates_list[: self.max_results]
+            from app.core.config import settings
+            max_results = settings.discovery_max_candidates
+            return candidates_list[:max_results]
 
         except Exception as e:
             logger.error("Discovery failed for intent '%s': %s", intent, e)
@@ -1048,3 +1050,54 @@ class SingStatConnector(BaseConnector):
                 ]
 
         return schema
+
+    def estimate_rows(self, dataset_ref: str) -> int:
+        """
+        Estimate row count for a SingStat dataset.
+
+        Attempts to get row count from tableinfo API if available.
+
+        Args:
+            dataset_ref: Resource ID or URL
+
+        Returns:
+            Estimated row count (uses default if unavailable)
+        """
+        from app.core.config import settings
+
+        try:
+            resource_id = self._extract_resource_id(dataset_ref)
+
+            # Try tableinfo endpoint for metadata
+            tableinfo_url = f"{self.BASE_URL}/tableinfo/{resource_id}"
+            response = self._make_request(tableinfo_url)
+
+            if response is not None:
+                data = response.json()
+                # Check for TotalRecords in response
+                total_records = data.get("Data", {}).get("TotalRecords")
+                if total_records is not None:
+                    return int(total_records)
+
+                # Check for rowCount or similar fields
+                row_count = data.get("Data", {}).get("rowCount")
+                if row_count is not None:
+                    return int(row_count)
+
+                # Try to estimate from variable combinations
+                variables = data.get("Data", {}).get("variables", [])
+                if variables:
+                    # Rough estimate: product of unique values per variable
+                    # This is a heuristic and may not be accurate
+                    estimated = 1
+                    for var in variables[:3]:  # Limit to first 3 variables
+                        levels = var.get("levels", [])
+                        if levels:
+                            estimated *= len(levels)
+                    if estimated > 1:
+                        return min(estimated, 10000)  # Cap at 10000
+
+        except Exception as e:
+            logger.warning(f"Row estimation failed for {dataset_ref}: {e}")
+
+        return settings.row_estimate_default

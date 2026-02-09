@@ -87,7 +87,7 @@ class RunResponse(BaseModel):
 class CreateRunResponse(BaseModel):
     """Response for creating a run."""
     run: RunResponse
-    plan: PlanResponse
+    plan: Optional[PlanResponse] = None  # May be null during planning status
 
 
 class ApproveRunResponse(BaseModel):
@@ -197,6 +197,19 @@ class ArtifactsResponse(BaseModel):
     insights: Optional[List[InsightResponse]] = None
     datasets: Optional[List[DatasetInfo]] = None
     report_md: Optional[str] = None
+
+
+class RunDatasetSnapshotResponse(BaseModel):
+    """Run-scoped dataset snapshot used in execution."""
+    run_id: UUID
+    dataset_id: int
+    dataset_name: str
+    source_uri: Optional[str] = None
+    columns: List[str]
+    rows: List[List[Any]]
+    total_row_count: int
+    is_truncated: bool
+    created_at: datetime
 
 
 # ============================================================================

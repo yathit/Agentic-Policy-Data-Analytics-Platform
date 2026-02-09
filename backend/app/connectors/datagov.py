@@ -61,7 +61,7 @@ class DataGovV2Connector(BaseConnector):
         self,
         intent: str,
         db: Optional["Session"] = None,
-        limit: int = 10,
+        limit: Optional[int] = None,
     ) -> List[DatasetCandidate]:
         """
         Discover datasets from cached collections in the database.
@@ -76,11 +76,15 @@ class DataGovV2Connector(BaseConnector):
         Args:
             intent: Search keyword (e.g., "employment statistics")
             db: SQLAlchemy database session (required for discovery)
-            limit: Maximum number of datasets to return (default: 10)
+            limit: Maximum number of datasets to return (uses config default if None)
 
         Returns:
             List of DatasetCandidate objects with uri = dataset_id
         """
+        from app.core.config import settings
+
+        if limit is None:
+            limit = settings.discovery_max_candidates
         if db is None:
             logger.warning(
                 "discover() called without db session; returning empty list"
@@ -387,15 +391,10 @@ class DataGovV2Connector(BaseConnector):
 
         for col in date_columns:
             try:
-                parsed_dates = pd.to_datetime(cleaned_df[col], errors="coerce")
-                if parsed_dates.notna().sum() > 0:
-                    cleaned_df[col] = parsed_dates
-                    cleaning_logs.append({
-                        "operation": "parse_dates",
-                        "description": f"Parsed column '{col}' as datetime",
-                        "parameters": {"column": col},
-                        "columns_affected": [col],
-                    })
+                parsed_series, log_entry = self._parse_datetime_column(col, cleaned_df[col])
+                if parsed_series is not None and log_entry is not None:
+                    cleaned_df[col] = parsed_series
+                    cleaning_logs.append(log_entry)
             except Exception:
                 pass
 
@@ -414,6 +413,54 @@ class DataGovV2Connector(BaseConnector):
             cleaned_df=cleaned_df,
             cleaning_logs=cleaning_logs,
         )
+
+    def _parse_datetime_column(
+        self,
+        column_name: str,
+        series: pd.Series,
+    ) -> tuple[Optional[pd.Series], Optional[Dict[str, Any]]]:
+        """
+        Parse date/time-like columns with guards for year and numeric IDs.
+
+        Returns:
+            Tuple of (parsed_series, cleaning_log_entry). If no conversion is applied,
+            returns (None, None).
+        """
+        non_null = series.dropna()
+        if non_null.empty:
+            return None, None
+
+        # Check if values look like year-only data (e.g., 1996, "2020")
+        # This handles both numeric and string columns containing just years
+        year_numeric = pd.to_numeric(series, errors="coerce")
+        non_null_year = year_numeric.dropna()
+        if not non_null_year.empty:
+            year_like = non_null_year[(non_null_year >= 1900) & (non_null_year <= 2100)]
+            # Also check that values are integers (no decimal part)
+            is_integer_like = (non_null_year == non_null_year.round()).all()
+            if len(year_like) / len(non_null_year) >= 0.9 and is_integer_like:
+                return year_numeric.round().astype("Int64"), {
+                    "operation": "normalize_year",
+                    "description": f"Normalized column '{column_name}' as year values",
+                    "parameters": {"column": column_name},
+                    "columns_affected": [column_name],
+                }
+
+        # Avoid converting numeric identifier columns to datetime nanoseconds.
+        if pd.api.types.is_numeric_dtype(series):
+            return None, None
+
+        parsed_dates = pd.to_datetime(series, errors="coerce")
+        parse_ratio = parsed_dates.notna().sum() / len(non_null)
+        if parse_ratio < 0.8:
+            return None, None
+
+        return parsed_dates, {
+            "operation": "parse_dates",
+            "description": f"Parsed column '{column_name}' as datetime",
+            "parameters": {"column": column_name, "parse_ratio": round(parse_ratio, 3)},
+            "columns_affected": [column_name],
+        }
 
     def _make_request_with_retry(
         self,
@@ -496,3 +543,40 @@ class DataGovV2Connector(BaseConnector):
             "license_info": "Singapore Open Data License",
             "dataset_id": dataset_ref,
         }
+
+    def estimate_rows(self, dataset_ref: str) -> int:
+        """
+        Estimate row count using first-page metadata from list-rows API.
+
+        The V2 API may return a 'total' field in the first page response.
+
+        Args:
+            dataset_ref: Dataset ID
+
+        Returns:
+            Estimated row count (uses default if unavailable)
+        """
+        from app.core.config import settings
+
+        try:
+            url = f"{self.API_BASE_V2}/datasets/{dataset_ref}/list-rows"
+            response = self._make_request_with_retry(url)
+
+            if response and "data" in response:
+                data = response["data"]
+                # Check for total field in response
+                total = data.get("total")
+                if total is not None:
+                    return int(total)
+                # Fall back to counting rows in first page
+                rows = data.get("rows", [])
+                if rows:
+                    # If there's a next link, estimate based on page size
+                    if data.get("links", {}).get("next"):
+                        # Assume at least 2x the page size
+                        return len(rows) * 2
+                    return len(rows)
+        except Exception as e:
+            logger.warning(f"Row estimation failed for {dataset_ref}: {e}")
+
+        return settings.row_estimate_default
