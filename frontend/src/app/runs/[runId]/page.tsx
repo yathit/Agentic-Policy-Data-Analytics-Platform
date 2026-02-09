@@ -312,14 +312,12 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
           />
         )}
 
-        {/* Live Activity Status (hide during planning to avoid redundancy) */}
-        {run.status !== 'planning' && (
-          <AgentActivityStatus
-            events={events}
-            runStatus={run.status}
-            wsStatus={wsStatus}
-          />
-        )}
+        {/* Live Activity Status */}
+        <AgentActivityStatus
+          events={events}
+          runStatus={run.status}
+          wsStatus={wsStatus}
+        />
 
         {/* Plan Review (for needs_approval/awaiting_approval status) */}
         {(run.status === 'needs_approval' || run.status === 'awaiting_approval') && plan && (

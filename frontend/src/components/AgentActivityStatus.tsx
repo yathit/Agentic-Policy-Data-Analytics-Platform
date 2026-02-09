@@ -37,6 +37,7 @@ export default function AgentActivityStatus({
   wsStatus,
 }: AgentActivityStatusProps) {
   const isRunning = runStatus === 'running' || runStatus === 'queued';
+  const isPlanning = runStatus === 'planning';
   const latestEvent = events.length > 0 ? events[events.length - 1] : null;
   const activeAgent = latestEvent?.agent as AgentType | undefined;
   const agentMeta = activeAgent ? agentConfig[activeAgent] : null;
@@ -44,8 +45,11 @@ export default function AgentActivityStatus({
     acc[event.agent] = event;
     return acc;
   }, {} as Partial<Record<AgentType, AgentEvent>>);
+  const planningStageEvents = events
+    .filter((event) => typeof event.payload?.stage === 'string')
+    .slice(-5);
 
-  if (!isRunning && runStatus !== 'awaiting_approval') {
+  if (!isRunning && !isPlanning && runStatus !== 'awaiting_approval') {
     return null;
   }
 
@@ -54,7 +58,7 @@ export default function AgentActivityStatus({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           {/* Animated pulse indicator */}
-          {isRunning && (
+          {(isRunning || isPlanning) && (
             <div className="relative">
               <span className="flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
@@ -66,6 +70,7 @@ export default function AgentActivityStatus({
           <div>
             <div className="flex items-center gap-2">
               <span className="font-medium text-gray-900">
+                {runStatus === 'planning' && 'Building plan'}
                 {runStatus === 'queued' && 'Waiting to start...'}
                 {runStatus === 'running' && 'Processing'}
                 {runStatus === 'awaiting_approval' && 'Awaiting your approval'}
@@ -158,6 +163,24 @@ export default function AgentActivityStatus({
                     </pre>
                   </details>
                 )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Recent planning stage events */}
+      {isPlanning && planningStageEvents.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {planningStageEvents.map((event, index) => {
+            const stage = String(event.payload?.stage ?? '').replaceAll('_', ' ');
+            return (
+              <div
+                key={`${event.ts}-${index}`}
+                className="rounded border border-indigo-100 bg-white/80 p-2"
+              >
+                <p className="text-xs font-medium text-indigo-700 capitalize">{stage}</p>
+                <p className="text-xs text-gray-600 mt-0.5">{event.message}</p>
               </div>
             );
           })}
