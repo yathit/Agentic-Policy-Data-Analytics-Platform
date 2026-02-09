@@ -33,6 +33,8 @@ backend/tests/
 docker-compose -f infra/docker-compose.yml exec api pytest -v
 ```
 
+
+
 ### Run All Tests (Including Integration)
 
 ```bash

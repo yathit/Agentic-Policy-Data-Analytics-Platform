@@ -4,7 +4,10 @@ Provides high-level interface for working with data connectors.
 """
 
 import hashlib
+import uuid as uuid_module
+import logging
 import pandas as pd
+import numpy as np
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -14,6 +17,10 @@ from app.connectors import DataGovV2Connector, SingStatConnector, InternalConnec
 from app.core.config import settings
 from app.db.repo_data_gov_sg_collection import search_collections
 from app.models.dataset import Dataset, DatasetProvenance, ValidationReport, CleaningLog
+from app.models.run import RunDatasetSnapshot
+
+logger = logging.getLogger(__name__)
+RUN_DATASET_SNAPSHOT_MAX_ROWS = 2000
 
 
 class DataService:
@@ -124,6 +131,7 @@ class DataService:
         dataset_ref: str,
         name: str,
         format_hint: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> Dataset:
         """
         Ingest a dataset through the full pipeline:
@@ -173,6 +181,7 @@ class DataService:
             validation_report=validation_report,
             cleaning_result=cleaning_result,
             provenance_info=provenance_info,
+            run_id=run_id,
         )
 
         return dataset
@@ -187,6 +196,7 @@ class DataService:
         validation_report: QualityReport,
         cleaning_result: CleaningResult,
         provenance_info: Dict[str, Any],
+        run_id: Optional[str] = None,
     ) -> Dataset:
         """
         Persist dataset and all associated metadata to database.
@@ -283,11 +293,81 @@ class DataService:
 
             self.db.add(cleaning_log)
 
+        # Persist run-scoped snapshot so the UI can view the exact data used in this run.
+        if run_id:
+            try:
+                self._upsert_run_dataset_snapshot(run_id=run_id, dataset_id=dataset.id, df=df)
+            except Exception as e:
+                logger.warning(
+                    "Failed to persist run dataset snapshot for run_id=%s dataset_id=%s: %s",
+                    run_id,
+                    dataset.id,
+                    e,
+                )
+
         # Commit all changes
         self.db.commit()
         self.db.refresh(dataset)
 
         return dataset
+
+    def _upsert_run_dataset_snapshot(self, run_id: str, dataset_id: int, df: pd.DataFrame) -> None:
+        """Persist a run-specific dataset snapshot used during this execution."""
+        run_uuid = uuid_module.UUID(str(run_id))
+        total_row_count = int(len(df))
+        is_truncated = total_row_count > RUN_DATASET_SNAPSHOT_MAX_ROWS
+        snapshot_df = df.head(RUN_DATASET_SNAPSHOT_MAX_ROWS).copy() if is_truncated else df.copy()
+
+        columns = [str(col) for col in snapshot_df.columns.tolist()]
+        rows = [
+            [self._json_safe_value(value) for value in row]
+            for row in snapshot_df.itertuples(index=False, name=None)
+        ]
+
+        existing = (
+            self.db.query(RunDatasetSnapshot)
+            .filter(
+                RunDatasetSnapshot.run_id == run_uuid,
+                RunDatasetSnapshot.dataset_id == dataset_id,
+            )
+            .first()
+        )
+        if existing:
+            existing.columns = columns
+            existing.rows = rows
+            existing.total_row_count = total_row_count
+            existing.is_truncated = is_truncated
+        else:
+            self.db.add(
+                RunDatasetSnapshot(
+                    run_id=run_uuid,
+                    dataset_id=dataset_id,
+                    columns=columns,
+                    rows=rows,
+                    total_row_count=total_row_count,
+                    is_truncated=is_truncated,
+                )
+            )
+
+    def _json_safe_value(self, value: Any) -> Any:
+        """Convert pandas/numpy values to JSON-safe primitives."""
+        if value is None:
+            return None
+        if isinstance(value, (np.integer,)):
+            return int(value)
+        if isinstance(value, (np.floating,)):
+            return float(value)
+        if isinstance(value, (np.bool_, bool)):
+            return bool(value)
+        if isinstance(value, pd.Timestamp):
+            return value.isoformat()
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, (list, dict, str, int, float)):
+            return value
+        if pd.isna(value):
+            return None
+        return str(value)
 
     def get_dataset(self, dataset_id: int) -> Optional[Dataset]:
         """

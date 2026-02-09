@@ -8,6 +8,7 @@ import type {
   ExportRequest,
   ExportResponse,
   SourceOption,
+  RunDatasetSnapshot,
 } from './types';
 
 // API base URL - can be configured via environment variable
@@ -99,6 +100,14 @@ export async function getRunArtifacts(runId: string): Promise<Artifacts> {
     datasets: response.datasets ?? [],
     report_md: response.report_md,
   };
+}
+
+// Get run-scoped dataset snapshot
+export async function getRunDatasetSnapshot(
+  runId: string,
+  datasetId: string
+): Promise<RunDatasetSnapshot> {
+  return apiFetch<RunDatasetSnapshot>(`/runs/${runId}/datasets/${datasetId}`);
 }
 
 // Get run history

@@ -146,6 +146,17 @@ export interface Artifacts {
   report_pdf?: string;
 }
 
+export interface RunDatasetSnapshot {
+  run_id: string;
+  dataset_id: number;
+  dataset_name: string;
+  columns: string[];
+  rows: (string | number | boolean | null)[][];
+  total_row_count: number;
+  is_truncated: boolean;
+  created_at: string;
+}
+
 // API request/response types
 export interface CreateRunRequest {
   query: string;

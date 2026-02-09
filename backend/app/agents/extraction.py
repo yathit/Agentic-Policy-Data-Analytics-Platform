@@ -196,6 +196,7 @@ class ExtractionAgent:
                     source_type=step.source,
                     dataset_ref=step.dataset_ref,
                     name=f"{step.source}_{step.dataset_ref}",
+                    run_id=run_id,
                 )
 
                 # Get validation report
@@ -239,7 +240,10 @@ class ExtractionAgent:
                     run_id,
                     EventPhase.DECISION,
                     f"Dataset {dataset.id} successfully extracted and validated",
-                    {"dataset_id": dataset.id},
+                    {
+                        "dataset_id": dataset.id,
+                        "run_dataset_url": f"/runs/{run_id}/datasets/{dataset.id}",
+                    },
                 )
 
                 return ExtractionResult(dataset=dataset, success=True)

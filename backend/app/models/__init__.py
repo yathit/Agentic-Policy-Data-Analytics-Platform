@@ -14,6 +14,7 @@ from app.models.run import (
     Plan,
     Event,
     Artifact,
+    RunDatasetSnapshot,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "Plan",
     "Event",
     "Artifact",
+    "RunDatasetSnapshot",
 ]

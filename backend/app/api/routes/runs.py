@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models import Run, RunStatus, Plan, Event, Artifact, Dataset
+from app.models import Run, RunStatus, Plan, Event, Artifact, Dataset, RunDatasetSnapshot
 from app.utils.sources import normalize_sources
 from app.schemas.run import (
     CreateRunRequest,
@@ -32,6 +32,7 @@ from app.schemas.run import (
     Evidence,
     Citation,
     DatasetInfo,
+    RunDatasetSnapshotResponse,
 )
 from app.api.errors import NotFoundError, ConflictError, ValidationException
 
@@ -493,6 +494,41 @@ async def get_artifacts(
         insights=insights,
         datasets=datasets,
         report_md=artifact.report_md,
+    )
+
+
+@router.get("/runs/{run_id}/datasets/{dataset_id}", response_model=RunDatasetSnapshotResponse)
+async def get_run_dataset_snapshot(
+    run_id: str,
+    dataset_id: int,
+    db: Session = Depends(get_db),
+):
+    """Get run-scoped dataset snapshot captured during extraction."""
+    run = _get_run_or_404(db, run_id)
+    snapshot = (
+        db.query(RunDatasetSnapshot)
+        .join(Dataset, Dataset.id == RunDatasetSnapshot.dataset_id)
+        .filter(
+            RunDatasetSnapshot.run_id == run.id,
+            RunDatasetSnapshot.dataset_id == dataset_id,
+        )
+        .first()
+    )
+    if not snapshot:
+        raise NotFoundError("RunDatasetSnapshot", f"{run_id}:{dataset_id}")
+
+    dataset = db.query(Dataset).filter(Dataset.id == snapshot.dataset_id).first()
+    dataset_name = dataset.name if dataset else f"dataset_{dataset_id}"
+
+    return RunDatasetSnapshotResponse(
+        run_id=run.id,
+        dataset_id=snapshot.dataset_id,
+        dataset_name=dataset_name,
+        columns=snapshot.columns or [],
+        rows=snapshot.rows or [],
+        total_row_count=snapshot.total_row_count,
+        is_truncated=snapshot.is_truncated,
+        created_at=snapshot.created_at,
     )
 
 

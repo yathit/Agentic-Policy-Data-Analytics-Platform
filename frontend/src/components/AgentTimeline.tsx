@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import type { AgentEvent, EventPhase, AgentType } from '@/lib/types';
 
 interface AgentTimelineProps {
@@ -89,7 +90,7 @@ const URL_FIELD_NAMES = new Set([
 /**
  * Render a payload value, converting URLs to clickable links.
  */
-function renderPayloadValue(key: string, value: unknown): React.ReactNode {
+function renderPayloadValue(key: string, value: unknown): ReactNode {
   // Check if this is a URL field or looks like a URL
   if (isUrl(value) || (typeof value === 'string' && URL_FIELD_NAMES.has(key))) {
     if (isUrl(value)) {
@@ -113,6 +114,24 @@ function renderPayloadValue(key: string, value: unknown): React.ReactNode {
 
   // For primitives, return as string
   return String(value);
+}
+
+function getRunDatasetPath(event: AgentEvent): string | null {
+  if (event.agent !== 'extraction' || event.phase !== 'decision' || !event.payload) {
+    return null;
+  }
+
+  const directPath = event.payload.run_dataset_url;
+  if (typeof directPath === 'string' && directPath.trim().length > 0) {
+    return directPath;
+  }
+
+  const datasetId = event.payload.dataset_id;
+  if (typeof datasetId === 'number' || typeof datasetId === 'string') {
+    return `/runs/${event.run_id}/datasets/${datasetId}`;
+  }
+
+  return null;
 }
 
 /**
@@ -181,6 +200,7 @@ export default function AgentTimeline({ events, filters }: AgentTimelineProps) {
           const phase = phaseConfig[event.phase];
           const agent = agentConfig[event.agent];
           const agentMeta = agent ?? { label: event.agent, color: 'bg-gray-400' };
+          const runDatasetPath = getRunDatasetPath(event);
 
           return (
             <div key={index} className="relative pl-10">
@@ -208,6 +228,16 @@ export default function AgentTimeline({ events, filters }: AgentTimelineProps) {
                   </span>
                 </div>
                 <p className="text-sm text-gray-700">{event.message}</p>
+                {runDatasetPath && (
+                  <div className="mt-3">
+                    <a
+                      href={runDatasetPath}
+                      className="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                    >
+                      View data used in this run
+                    </a>
+                  </div>
+                )}
                 {event.payload && Object.keys(event.payload).length > 0 && (
                   <details className="mt-2">
                     <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">

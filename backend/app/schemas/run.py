@@ -199,6 +199,18 @@ class ArtifactsResponse(BaseModel):
     report_md: Optional[str] = None
 
 
+class RunDatasetSnapshotResponse(BaseModel):
+    """Run-scoped dataset snapshot used in execution."""
+    run_id: UUID
+    dataset_id: int
+    dataset_name: str
+    columns: List[str]
+    rows: List[List[Any]]
+    total_row_count: int
+    is_truncated: bool
+    created_at: datetime
+
+
 # ============================================================================
 # WebSocket Schemas
 # ============================================================================
