@@ -150,6 +150,7 @@ export interface RunDatasetSnapshot {
   run_id: string;
   dataset_id: number;
   dataset_name: string;
+  source_uri?: string;
   columns: string[];
   rows: (string | number | boolean | null)[][];
   total_row_count: number;

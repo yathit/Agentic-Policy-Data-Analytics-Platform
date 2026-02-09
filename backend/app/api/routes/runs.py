@@ -519,11 +519,13 @@ async def get_run_dataset_snapshot(
 
     dataset = db.query(Dataset).filter(Dataset.id == snapshot.dataset_id).first()
     dataset_name = dataset.name if dataset else f"dataset_{dataset_id}"
+    source_uri = dataset.provenance.source_uri if dataset and dataset.provenance else None
 
     return RunDatasetSnapshotResponse(
         run_id=run.id,
         dataset_id=snapshot.dataset_id,
         dataset_name=dataset_name,
+        source_uri=source_uri,
         columns=snapshot.columns or [],
         rows=snapshot.rows or [],
         total_row_count=snapshot.total_row_count,

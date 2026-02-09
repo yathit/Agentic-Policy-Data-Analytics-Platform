@@ -391,15 +391,10 @@ class DataGovV2Connector(BaseConnector):
 
         for col in date_columns:
             try:
-                parsed_dates = pd.to_datetime(cleaned_df[col], errors="coerce")
-                if parsed_dates.notna().sum() > 0:
-                    cleaned_df[col] = parsed_dates
-                    cleaning_logs.append({
-                        "operation": "parse_dates",
-                        "description": f"Parsed column '{col}' as datetime",
-                        "parameters": {"column": col},
-                        "columns_affected": [col],
-                    })
+                parsed_series, log_entry = self._parse_datetime_column(col, cleaned_df[col])
+                if parsed_series is not None and log_entry is not None:
+                    cleaned_df[col] = parsed_series
+                    cleaning_logs.append(log_entry)
             except Exception:
                 pass
 
@@ -418,6 +413,52 @@ class DataGovV2Connector(BaseConnector):
             cleaned_df=cleaned_df,
             cleaning_logs=cleaning_logs,
         )
+
+    def _parse_datetime_column(
+        self,
+        column_name: str,
+        series: pd.Series,
+    ) -> tuple[Optional[pd.Series], Optional[Dict[str, Any]]]:
+        """
+        Parse date/time-like columns with guards for year and numeric IDs.
+
+        Returns:
+            Tuple of (parsed_series, cleaning_log_entry). If no conversion is applied,
+            returns (None, None).
+        """
+        non_null = series.dropna()
+        if non_null.empty:
+            return None, None
+
+        # Keep numeric year columns as year values (e.g., 1996), not epoch timestamps.
+        if "year" in column_name.lower():
+            year_numeric = pd.to_numeric(series, errors="coerce")
+            non_null_year = year_numeric.dropna()
+            if not non_null_year.empty:
+                year_like = non_null_year[(non_null_year >= 1900) & (non_null_year <= 2100)]
+                if len(year_like) / len(non_null_year) >= 0.9:
+                    return year_numeric.round().astype("Int64"), {
+                        "operation": "normalize_year",
+                        "description": f"Normalized column '{column_name}' as year values",
+                        "parameters": {"column": column_name},
+                        "columns_affected": [column_name],
+                    }
+
+        # Avoid converting numeric identifier columns to datetime nanoseconds.
+        if pd.api.types.is_numeric_dtype(series):
+            return None, None
+
+        parsed_dates = pd.to_datetime(series, errors="coerce")
+        parse_ratio = parsed_dates.notna().sum() / len(non_null)
+        if parse_ratio < 0.8:
+            return None, None
+
+        return parsed_dates, {
+            "operation": "parse_dates",
+            "description": f"Parsed column '{column_name}' as datetime",
+            "parameters": {"column": column_name, "parse_ratio": round(parse_ratio, 3)},
+            "columns_affected": [column_name],
+        }
 
     def _make_request_with_retry(
         self,

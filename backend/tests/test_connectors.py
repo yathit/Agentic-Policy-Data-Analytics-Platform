@@ -5,6 +5,7 @@ Tests for data source connectors.
 import pandas as pd
 
 from app.connectors import SingStatConnector, InternalConnector
+from app.connectors.datagov import DataGovV2Connector
 from app.connectors.base import DatasetCandidate
 
 
@@ -174,3 +175,24 @@ class TestInternalConnector:
 
         # Internal data should have high trust
         assert report.full_report["trust_level"] == "high"
+
+
+class TestDataGovConnector:
+    """Regression tests for Data.gov.sg connector cleaning."""
+
+    def test_clean_keeps_year_as_numeric(self):
+        """Numeric year values should not be converted to epoch-based timestamps."""
+        connector = DataGovV2Connector()
+
+        df = pd.DataFrame(
+            {
+                "year": [1996, 1997, 1998],
+                "value": ["10", "20", "30"],
+            }
+        )
+
+        result = connector.clean(df)
+
+        assert "year" in result.cleaned_df.columns
+        assert not pd.api.types.is_datetime64_any_dtype(result.cleaned_df["year"])
+        assert int(result.cleaned_df["year"].iloc[0]) == 1996

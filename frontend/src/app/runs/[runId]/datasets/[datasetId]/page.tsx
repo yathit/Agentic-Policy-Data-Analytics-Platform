@@ -70,6 +70,19 @@ export default function RunDatasetPage({ params }: RunDatasetPageProps) {
             Showing {data.rows.length.toLocaleString()} of {data.total_row_count.toLocaleString()} rows
             {data.is_truncated ? ' (truncated)' : ''}
           </div>
+          {data.source_uri && (
+            <div className="mt-2 text-sm">
+              <span className="text-gray-600">Source URL: </span>
+              <a
+                href={data.source_uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-800 underline break-all"
+              >
+                {data.source_uri}
+              </a>
+            </div>
+          )}
         </div>
 
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">

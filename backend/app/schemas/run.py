@@ -204,6 +204,7 @@ class RunDatasetSnapshotResponse(BaseModel):
     run_id: UUID
     dataset_id: int
     dataset_name: str
+    source_uri: Optional[str] = None
     columns: List[str]
     rows: List[List[Any]]
     total_row_count: int
