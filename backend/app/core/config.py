@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     llm_ranking_timeout_ms: int = 30000  # Timeout before falling back to deterministic
     llm_ranking_max_parallel: int = 5  # Max concurrent LLM ranking requests
 
+    # Fetch settings
+    fetch_max_pages_per_dataset: int = 20  # Max API pages to fetch per dataset
+
     # Selection settings
     selection_max_total_rows: int = 20000  # Total row budget for selected datasets
     selection_max_rows_per_dataset: int = 5000  # Per-dataset row cap

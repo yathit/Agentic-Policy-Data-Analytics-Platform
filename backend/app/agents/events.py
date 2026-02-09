@@ -43,6 +43,7 @@ def create_db_event_sink(
             phase=phase,
             message=event.message,
             payload=event.payload or {},
+            collapse_id=event.collapse_id,
         )
         db.add(db_event)
         db.commit()
@@ -58,6 +59,7 @@ def emit_db_event(
     phase: str,
     message: str,
     payload: Optional[dict] = None,
+    collapse_id: Optional[str] = None,
 ) -> Event:
     """
     Create and persist an event directly.
@@ -71,6 +73,7 @@ def emit_db_event(
         phase: Event phase (e.g., "reason", "action", "observation", "decision")
         message: Human-readable message
         payload: Optional structured data
+        collapse_id: Optional ID for collapsing related events in UI
 
     Returns:
         Created Event model instance
@@ -81,6 +84,7 @@ def emit_db_event(
         phase=phase,
         message=message,
         payload=payload or {},
+        collapse_id=collapse_id,
     )
     db.add(event)
     db.commit()

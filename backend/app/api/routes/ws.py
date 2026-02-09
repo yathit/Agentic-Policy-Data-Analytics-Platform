@@ -138,6 +138,7 @@ def _event_to_dict(event: Event) -> dict:
         "message": event.message,
         "payload": event.payload or {},
         "ts": event.ts.isoformat() if event.ts else None,
+        "collapse_id": event.collapse_id,
     }
 
 

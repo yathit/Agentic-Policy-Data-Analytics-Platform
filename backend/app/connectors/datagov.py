@@ -48,13 +48,14 @@ class DataGovV2Connector(BaseConnector):
     RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
+        from app.core.config import settings
+
         super().__init__(config)
         self.max_retries = config.get("max_retries", 3) if config else 3
         self.base_delay = config.get("base_delay", 2.0) if config else 2.0
         self.request_timeout = config.get("request_timeout", 30) if config else 30
         self.max_rows = config.get("max_rows", 100000) if config else 100000
-        # None means fetch all pages; set a limit for testing/demo if needed.
-        self.max_pages = config.get("max_pages") if config else None
+        self.max_pages = config.get("max_pages", settings.fetch_max_pages_per_dataset) if config else settings.fetch_max_pages_per_dataset
         self.api_key = config.get("api_key") if config else None
 
     def discover(
@@ -212,7 +213,7 @@ class DataGovV2Connector(BaseConnector):
         rows = data.get("rows", [])
         all_rows.extend(rows)
 
-        # Get total if available for percentage calculation
+        # Get total row count from metadata
         total_rows = data.get("total")
 
         # Report initial progress

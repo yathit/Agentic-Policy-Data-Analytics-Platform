@@ -77,7 +77,12 @@ class ExtractionAgent:
             return "You are an Extraction Agent for policy data analytics."
 
     def _emit_event(
-        self, run_id: str, phase: EventPhase, message: str, payload: Dict[str, Any] = None
+        self,
+        run_id: str,
+        phase: EventPhase,
+        message: str,
+        payload: Dict[str, Any] = None,
+        collapse_id: str = None,
     ):
         """
         Emit ReAct event.
@@ -87,6 +92,7 @@ class ExtractionAgent:
             phase: Event phase
             message: Human-readable message
             payload: Structured data
+            collapse_id: Optional ID for collapsing related events in UI
         """
         event = AgentEvent(
             run_id=run_id,
@@ -94,6 +100,7 @@ class ExtractionAgent:
             phase=phase,
             message=message,
             payload=payload or {},
+            collapse_id=collapse_id,
         )
         if self.event_sink:
             self.event_sink(event)
@@ -197,8 +204,10 @@ class ExtractionAgent:
                     {"attempt": attempt + 1, "max_retries": max_retries},
                 )
 
-                # Progress callback for fetch updates
-                def on_fetch_progress(progress: dict, label=dataset_label, source=step.source):
+                # Progress callback for fetch updates - use collapse_id to group events
+                fetch_collapse_id = f"fetch_{step.dataset_ref}"
+
+                def on_fetch_progress(progress: dict, label=dataset_label, source=step.source, cid=fetch_collapse_id):
                     rows = progress.get("rows_fetched", 0)
                     total = progress.get("total_rows")
                     page = progress.get("page", 1)
@@ -216,6 +225,7 @@ class ExtractionAgent:
                         EventPhase.ACTION,
                         msg,
                         {"rows_fetched": rows, "total_rows": total, "page": page, "percent": percent, "source": source},
+                        collapse_id=cid,
                     )
 
                 # Use DataService for full ingestion pipeline
