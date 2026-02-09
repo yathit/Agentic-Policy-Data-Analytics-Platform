@@ -8,7 +8,7 @@ import uuid as uuid_module
 import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -132,6 +132,7 @@ class DataService:
         name: str,
         format_hint: Optional[str] = None,
         run_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dataset:
         """
         Ingest a dataset through the full pipeline:
@@ -142,6 +143,7 @@ class DataService:
             dataset_ref: Reference to the dataset (URL, table name, etc.)
             name: Display name for the dataset
             format_hint: Optional format hint
+            progress_callback: Optional callback for fetch progress updates
 
         Returns:
             Persisted Dataset object with all metadata
@@ -157,7 +159,7 @@ class DataService:
             raw_bytes = b""
         else:
             # 1. Fetch raw data
-            raw_bytes = connector.fetch(dataset_ref)
+            raw_bytes = connector.fetch(dataset_ref, progress_callback)
 
             # 2. Parse to DataFrame
             df = connector.parse(raw_bytes, format_hint)

@@ -4,7 +4,7 @@ Queries internal database tables with high trust and low latency.
 """
 
 import pandas as pd
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -107,13 +107,18 @@ class InternalConnector(BaseConnector):
 
         return candidates
 
-    def fetch(self, dataset_ref: str) -> bytes:
+    def fetch(
+        self,
+        dataset_ref: str,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> bytes:
         """
         Fetch is not used for database queries.
         Use fetch_dataframe() directly instead.
 
         Args:
             dataset_ref: Table reference (e.g., "table:digital_sector_employment")
+            progress_callback: Optional callback for progress updates (not used for internal)
 
         Returns:
             Empty bytes (not applicable for database)

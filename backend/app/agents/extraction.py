@@ -182,14 +182,41 @@ class ExtractionAgent:
 
         # Retry logic
         max_retries = 3
+        dataset_label = step.title if step.title else step.dataset_ref
         for attempt in range(max_retries):
             try:
+                # Only show attempt number for retries
+                if attempt == 0:
+                    action_msg = f"Fetching '{dataset_label}'"
+                else:
+                    action_msg = f"Attempt {attempt + 1}/{max_retries}: Fetching '{dataset_label}'"
                 self._emit_event(
                     run_id,
                     EventPhase.ACTION,
-                    f"Attempt {attempt + 1}/{max_retries}: Calling {step.source} connector",
+                    action_msg,
                     {"attempt": attempt + 1, "max_retries": max_retries},
                 )
+
+                # Progress callback for fetch updates
+                def on_fetch_progress(progress: dict, label=dataset_label, source=step.source):
+                    rows = progress.get("rows_fetched", 0)
+                    total = progress.get("total_rows")
+                    page = progress.get("page", 1)
+                    percent = progress.get("percent")
+
+                    if percent is not None:
+                        msg = f"Fetching {rows:,} rows ({percent}%) - '{label}' ({source})"
+                    elif total is not None:
+                        msg = f"Fetching {rows:,} of {total:,} rows - '{label}' ({source})"
+                    else:
+                        msg = f"Fetching {rows:,} rows (page {page}) - '{label}' ({source})"
+
+                    self._emit_event(
+                        run_id,
+                        EventPhase.ACTION,
+                        msg,
+                        {"rows_fetched": rows, "total_rows": total, "page": page, "percent": percent, "source": source},
+                    )
 
                 # Use DataService for full ingestion pipeline
                 dataset = self.data_service.ingest_dataset(
@@ -197,6 +224,7 @@ class ExtractionAgent:
                     dataset_ref=step.dataset_ref,
                     name=f"{step.source}_{step.dataset_ref}",
                     run_id=run_id,
+                    progress_callback=on_fetch_progress,
                 )
 
                 # Get validation report
