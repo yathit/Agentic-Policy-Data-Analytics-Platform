@@ -993,6 +993,7 @@ Respond with JSON:
                     ExtractionStep(
                         source=source.name,
                         dataset_ref=dataset.id,
+                        title=dataset.title,
                         notes=f"Extract '{dataset.title}' (score: {dataset.score}) for: {intent.question[:50]}",
                     )
                 )

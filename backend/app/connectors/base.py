@@ -6,7 +6,7 @@ Defines the standard contract for data discovery, fetching, parsing, validation,
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable
 import pandas as pd
 from datetime import datetime
 
@@ -87,12 +87,18 @@ class BaseConnector(ABC):
         pass
 
     @abstractmethod
-    def fetch(self, dataset_ref: str) -> bytes:
+    def fetch(
+        self,
+        dataset_ref: str,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> bytes:
         """
         Fetch raw dataset bytes from the source.
 
         Args:
             dataset_ref: Reference to the dataset (URL, ID, or query)
+            progress_callback: Optional callback for progress updates.
+                Called with dict: {rows_fetched, total_rows, page, percent}
 
         Returns:
             Raw bytes of the dataset

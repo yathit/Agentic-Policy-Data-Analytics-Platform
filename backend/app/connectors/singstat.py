@@ -10,7 +10,7 @@ import logging
 import re
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
@@ -206,7 +206,11 @@ class SingStatConnector(BaseConnector):
 
         return ts_candidates + other_candidates
 
-    def fetch(self, dataset_ref: str) -> bytes:
+    def fetch(
+        self,
+        dataset_ref: str,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> bytes:
         """
         Fetch table data from SingStat Table Builder API.
 
@@ -214,6 +218,7 @@ class SingStatConnector(BaseConnector):
 
         Args:
             dataset_ref: Resource ID or full URL
+            progress_callback: Optional callback for progress updates (not used for SingStat)
 
         Returns:
             Raw bytes of the table data

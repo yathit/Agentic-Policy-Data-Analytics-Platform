@@ -124,6 +124,7 @@ class Event(Base):
     phase = Column(String(50), nullable=False)  # reason, action, observation, decision
     message = Column(Text, nullable=False)
     payload = Column(JSON, nullable=False, default=dict)
+    collapse_id = Column(String(100), nullable=True)  # Events with same collapse_id are collapsed in UI
 
     # Timestamp
     ts = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

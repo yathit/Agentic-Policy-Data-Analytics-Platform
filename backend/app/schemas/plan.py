@@ -97,6 +97,7 @@ class ExtractionStep(BaseModel):
 
     source: str = Field(..., description="Source name")
     dataset_ref: str = Field(..., description="Specific dataset reference (URI, ID, etc)")
+    title: str = Field(default="", description="Human-readable dataset title")
     notes: str = Field(..., description="Why this dataset is needed")
 
 

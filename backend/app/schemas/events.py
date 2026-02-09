@@ -46,6 +46,10 @@ class AgentEvent(BaseModel):
         default_factory=dict, description="Structured event data"
     )
     ts: datetime = Field(default_factory=datetime.utcnow, description="Event timestamp")
+    collapse_id: Optional[str] = Field(
+        default=None,
+        description="Events with same collapse_id should be collapsed in UI, showing only the latest",
+    )
 
     class Config:
         json_schema_extra = {

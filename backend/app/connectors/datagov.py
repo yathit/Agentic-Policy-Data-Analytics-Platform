@@ -10,7 +10,7 @@ import pandas as pd
 import io
 import time
 import logging
-from typing import List, Dict, Any, Optional, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Callable, TYPE_CHECKING
 
 from datetime import datetime
 
@@ -48,13 +48,14 @@ class DataGovV2Connector(BaseConnector):
     RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
+        from app.core.config import settings
+
         super().__init__(config)
         self.max_retries = config.get("max_retries", 3) if config else 3
         self.base_delay = config.get("base_delay", 2.0) if config else 2.0
         self.request_timeout = config.get("request_timeout", 30) if config else 30
         self.max_rows = config.get("max_rows", 100000) if config else 100000
-        # Keep integration/demo runs fast; override via config if needed.
-        self.max_pages = config.get("max_pages", 2) if config else 2
+        self.max_pages = config.get("max_pages", settings.fetch_max_pages_per_dataset) if config else settings.fetch_max_pages_per_dataset
         self.api_key = config.get("api_key") if config else None
 
     def discover(
@@ -154,7 +155,11 @@ class DataGovV2Connector(BaseConnector):
         )
         return candidates
 
-    def fetch(self, dataset_ref: str) -> bytes:
+    def fetch(
+        self,
+        dataset_ref: str,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> bytes:
         """
         Fetch dataset data from V2 API.
 
@@ -162,13 +167,15 @@ class DataGovV2Connector(BaseConnector):
 
         Args:
             dataset_ref: Dataset ID (e.g., 'd_xxxxx')
+            progress_callback: Optional callback for progress updates.
+                Called with dict: {rows_fetched, total_rows, page, percent}
 
         Returns:
             Raw bytes (CSV format)
         """
         dataset_id = dataset_ref
 
-        df = self._fetch_via_list_rows(dataset_id)
+        df = self._fetch_via_list_rows(dataset_id, progress_callback)
         if df is not None and not df.empty:
             logger.info(
                 "Fetched %d rows via list-rows API for %s",
@@ -179,12 +186,17 @@ class DataGovV2Connector(BaseConnector):
 
         raise ValueError(f"Failed to fetch dataset {dataset_id}")
 
-    def _fetch_via_list_rows(self, dataset_id: str) -> Optional[pd.DataFrame]:
+    def _fetch_via_list_rows(
+        self,
+        dataset_id: str,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Optional[pd.DataFrame]:
         """
         Fetch all rows using paginated list-rows API.
 
         Args:
             dataset_id: Dataset ID
+            progress_callback: Optional callback for progress updates
 
         Returns:
             DataFrame with all rows, or None if failed
@@ -201,9 +213,22 @@ class DataGovV2Connector(BaseConnector):
         rows = data.get("rows", [])
         all_rows.extend(rows)
 
-        # Handle pagination
+        # Get total row count from metadata
+        total_rows = data.get("total")
+
+        # Report initial progress
+        if progress_callback:
+            percent = round((len(all_rows) / total_rows) * 100) if total_rows else None
+            progress_callback({
+                "rows_fetched": len(all_rows),
+                "total_rows": total_rows,
+                "page": 1,
+                "percent": percent,
+            })
+
+        # Handle pagination - fetch all pages when max_pages is None
         page_count = 1
-        while data.get("links", {}).get("next") and page_count < self.max_pages:
+        while data.get("links", {}).get("next") and (self.max_pages is None or page_count < self.max_pages):
             next_link = data["links"]["next"]
             # Handle relative URLs - append to base URL
             if not next_link.startswith("http"):
@@ -217,6 +242,16 @@ class DataGovV2Connector(BaseConnector):
             all_rows.extend(data.get("rows", []))
             page_count += 1
 
+            # Report progress after each page
+            if progress_callback:
+                percent = round((len(all_rows) / total_rows) * 100) if total_rows else None
+                progress_callback({
+                    "rows_fetched": len(all_rows),
+                    "total_rows": total_rows,
+                    "page": page_count,
+                    "percent": percent,
+                })
+
             # Safety limit
             if len(all_rows) >= self.max_rows:
                 logger.warning(
@@ -225,7 +260,7 @@ class DataGovV2Connector(BaseConnector):
                     dataset_id,
                 )
                 break
-        if data.get("links", {}).get("next") and page_count >= self.max_pages:
+        if data.get("links", {}).get("next") and self.max_pages is not None and page_count >= self.max_pages:
             logger.info(
                 "Page limit (%d) reached for %s, data may be truncated",
                 self.max_pages,
